@@ -1,0 +1,10 @@
+{
+  "description": "This web application streamlines task management by allowing users to input commands and receive actionable steps, enhancing productivity and organization.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

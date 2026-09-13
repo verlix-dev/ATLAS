@@ -1,0 +1,820 @@
+{
+ "events": [
+  {
+   "seq": 0,
+   "t": 1789200568.9937553,
+   "stage": "mission_start",
+   "profile": {
+    "rows": 1200,
+    "columns": 5,
+    "target": "churned",
+    "problem_type": "classification",
+    "target_confidence": "explicit",
+    "target_reason": "target supplied by the user",
+    "numeric": [
+     "tenure_months",
+     "monthly_charge",
+     "support_calls"
+    ],
+    "categorical": [
+     "plan",
+     "contract"
+    ],
+    "dtypes": {
+     "tenure_months": "int64",
+     "monthly_charge": "float64",
+     "support_calls": "int64",
+     "plan": "str",
+     "contract": "str"
+    },
+    "missing_per_column": {
+     "monthly_charge": 60
+    },
+    "missing_fraction": 0.01,
+    "duplicate_rows": 5,
+    "constant_columns": [],
+    "class_counts": {
+     "0": 948,
+     "1": 252
+    },
+    "minority_class": "1",
+    "imbalance_ratio": 3.761904761904762
+   },
+   "budget": {
+    "max_experiments": 6,
+    "target_score": 0.95,
+    "patience": 3,
+    "max_seconds": 300.0,
+    "max_consecutive_errors": 2
+   },
+   "plan": null,
+   "objective": {
+    "primary_metric": "f1_macro",
+    "direction": "maximize",
+    "secondary_metrics": [
+     "accuracy",
+     "precision",
+     "recall",
+     "roc_auc",
+     "pr_auc"
+    ]
+   }
+  },
+  {
+   "seq": 1,
+   "t": 1789200568.9937851,
+   "stage": "experiment_start",
+   "id": 1,
+   "config": {
+    "model": "logreg",
+    "params": {},
+    "preprocess": {
+     "impute": "median",
+     "scale": true
+    }
+   },
+   "origin": "baseline"
+  },
+  {
+   "seq": 2,
+   "t": 1789200569.147328,
+   "stage": "experiment_result",
+   "id": 1,
+   "ok": true,
+   "metrics": {
+    "f1_macro": 0.5845380111275784,
+    "accuracy": 0.81,
+    "precision": 0.6875,
+    "recall": 0.1746031746031746,
+    "roc_auc": 0.7386645234746501,
+    "pr_auc": 0.47151773418995246,
+    "positive_class": "1",
+    "train_f1_macro": 0.5875300265497914,
+    "overfit_gap": 0.002992015422212946,
+    "per_class_recall": {
+     "0": 0.9789029535864979,
+     "1": 0.1746031746031746
+    },
+    "confusion_matrix": [
+     [
+      232,
+      5
+     ],
+     [
+      52,
+      11
+     ]
+    ],
+    "labels": [
+     "0",
+     "1"
+    ],
+    "test_rows": 300,
+    "predicted_classes": 2
+   },
+   "error": null,
+   "seconds": 0.153
+  },
+  {
+   "seq": 3,
+   "t": 1789200569.1473558,
+   "stage": "diagnosis",
+   "id": 1,
+   "category": "model_issue",
+   "summary": "baseline established at 0.585; 2 issue(s) found",
+   "findings": [
+    "weak recall on class '1': 0.175",
+    "class imbalance 3.76:1 with weak minority recall"
+   ]
+  },
+  {
+   "seq": 4,
+   "t": 1789200569.1483014,
+   "stage": "hypothesis",
+   "id": 1,
+   "problem": "the last experiment leaves the objective short of its ceiling",
+   "proposed_change": "reweight the loss with class_weight='balanced' and impute categorically by mode",
+   "reasoning": "recall on the weakest class is 0.175 while the run scores 0.5845380111275784; reweighting the loss is the direct lever, and the profile reports missing values that mode-imputation handles without inventing a median",
+   "expected_effect": "higher minority-class recall",
+   "next_config": {
+    "model": "logreg",
+    "params": {
+     "class_weight": "balanced"
+    },
+    "preprocess": {
+     "impute": "most_frequent",
+     "scale": true
+    }
+   },
+   "source": "llm",
+   "cites": [
+    "weak recall on class '1': 0.175"
+   ],
+   "rejected": []
+  },
+  {
+   "seq": 5,
+   "t": 1789200569.1483243,
+   "stage": "decision",
+   "id": 1,
+   "action": "revise",
+   "reason": "data preparation must change: reweight the loss with class_weight='balanced' and impute categorically by mode"
+  },
+  {
+   "seq": 6,
+   "t": 1789200569.1483324,
+   "stage": "experiment_start",
+   "id": 2,
+   "config": {
+    "model": "logreg",
+    "params": {
+     "class_weight": "balanced"
+    },
+    "preprocess": {
+     "impute": "most_frequent",
+     "scale": true
+    }
+   },
+   "origin": "exp1: [llm] reweight the loss with class_weight='balanced' and impute categorically by mode"
+  },
+  {
+   "seq": 7,
+   "t": 1789200569.194256,
+   "stage": "experiment_result",
+   "id": 2,
+   "ok": true,
+   "metrics": {
+    "f1_macro": 0.589088441992345,
+    "accuracy": 0.6433333333333333,
+    "precision": 0.328125,
+    "recall": 0.6666666666666666,
+    "roc_auc": 0.7361194829549259,
+    "pr_auc": 0.45744758668893504,
+    "positive_class": "1",
+    "train_f1_macro": 0.6304096586275878,
+    "overfit_gap": 0.0413212166352428,
+    "per_class_recall": {
+     "0": 0.6371308016877637,
+     "1": 0.6666666666666666
+    },
+    "confusion_matrix": [
+     [
+      151,
+      86
+     ],
+     [
+      21,
+      42
+     ]
+    ],
+    "labels": [
+     "0",
+     "1"
+    ],
+    "test_rows": 300,
+    "predicted_classes": 2
+   },
+   "error": null,
+   "seconds": 0.046
+  },
+  {
+   "seq": 8,
+   "t": 1789200569.194291,
+   "stage": "diagnosis",
+   "id": 2,
+   "category": "insufficient",
+   "summary": "trained cleanly but gain +0.005 is below the 0.01 threshold",
+   "findings": []
+  },
+  {
+   "seq": 9,
+   "t": 1789200569.194746,
+   "stage": "hypothesis",
+   "id": 2,
+   "problem": "the last experiment leaves the objective short of its ceiling",
+   "proposed_change": "escalate to hist_gb, slow and heavily regularised (lr 0.04, 300 iters)",
+   "reasoning": "experiment 2 measured 0.589088441992345 with no blocking defect; hist_gb explores non-linear structure the current family cannot reach",
+   "expected_effect": "a higher primary metric than the current best",
+   "next_config": {
+    "model": "hist_gb",
+    "params": {
+     "class_weight": "balanced",
+     "learning_rate": 0.04,
+     "max_iter": 300,
+     "min_samples_leaf": 15
+    },
+    "preprocess": {
+     "impute": "most_frequent",
+     "scale": false
+    }
+   },
+   "source": "llm",
+   "cites": [
+    "score"
+   ],
+   "rejected": []
+  },
+  {
+   "seq": 10,
+   "t": 1789200569.1947656,
+   "stage": "decision",
+   "id": 2,
+   "action": "revise",
+   "reason": "data preparation must change: escalate to hist_gb, slow and heavily regularised (lr 0.04, 300 iters)"
+  },
+  {
+   "seq": 11,
+   "t": 1789200569.1947727,
+   "stage": "experiment_start",
+   "id": 3,
+   "config": {
+    "model": "hist_gb",
+    "params": {
+     "class_weight": "balanced",
+     "learning_rate": 0.04,
+     "max_iter": 300,
+     "min_samples_leaf": 15
+    },
+    "preprocess": {
+     "impute": "most_frequent",
+     "scale": false
+    }
+   },
+   "origin": "exp2: [llm] escalate to hist_gb, slow and heavily regularised (lr 0.04, 300 iters)"
+  },
+  {
+   "seq": 12,
+   "t": 1789200569.9312873,
+   "stage": "experiment_result",
+   "id": 3,
+   "ok": true,
+   "metrics": {
+    "f1_macro": 0.6759410801963994,
+    "accuracy": 0.78,
+    "precision": 0.47761194029850745,
+    "recall": 0.5079365079365079,
+    "roc_auc": 0.7825664724398902,
+    "pr_auc": 0.46719497822597617,
+    "positive_class": "1",
+    "train_f1_macro": 0.978762758227616,
+    "overfit_gap": 0.3028216780312166,
+    "per_class_recall": {
+     "0": 0.8523206751054853,
+     "1": 0.5079365079365079
+    },
+    "confusion_matrix": [
+     [
+      202,
+      35
+     ],
+     [
+      31,
+      32
+     ]
+    ],
+    "labels": [
+     "0",
+     "1"
+    ],
+    "test_rows": 300,
+    "predicted_classes": 2
+   },
+   "error": null,
+   "seconds": 0.736
+  },
+  {
+   "seq": 13,
+   "t": 1789200569.9313495,
+   "stage": "diagnosis",
+   "id": 3,
+   "category": "improvement",
+   "summary": "improved 0.589 -> 0.676 (+0.087)",
+   "findings": [
+    "overfitting: train f1 exceeds test f1 by 0.303"
+   ]
+  },
+  {
+   "seq": 14,
+   "t": 1789200569.9321384,
+   "stage": "hypothesis",
+   "id": 3,
+   "problem": "the last experiment leaves the objective short of its ceiling",
+   "proposed_change": "slow boosting: depth 3, lr 0.05, 250 iters, leaf floor 20",
+   "reasoning": "train f1 exceeds test f1 by 0.303 at a measured f1_macro of 0.6759410801963994, so the ceiling is variance, not capacity",
+   "expected_effect": "a smaller gap at similar or better score",
+   "next_config": {
+    "model": "hist_gb",
+    "params": {
+     "class_weight": "balanced",
+     "learning_rate": 0.05,
+     "max_iter": 250,
+     "min_samples_leaf": 20,
+     "max_depth": 3
+    },
+    "preprocess": {
+     "impute": "most_frequent",
+     "scale": false
+    }
+   },
+   "source": "llm",
+   "cites": [
+    "overfitting: train f1 exceeds test f1 by 0.303"
+   ],
+   "rejected": []
+  },
+  {
+   "seq": 15,
+   "t": 1789200569.9321678,
+   "stage": "decision",
+   "id": 3,
+   "action": "continue",
+   "reason": "testing next hypothesis: slow boosting: depth 3, lr 0.05, 250 iters, leaf floor 20"
+  },
+  {
+   "seq": 16,
+   "t": 1789200569.932181,
+   "stage": "experiment_start",
+   "id": 4,
+   "config": {
+    "model": "hist_gb",
+    "params": {
+     "class_weight": "balanced",
+     "learning_rate": 0.05,
+     "max_iter": 250,
+     "min_samples_leaf": 20,
+     "max_depth": 3
+    },
+    "preprocess": {
+     "impute": "most_frequent",
+     "scale": false
+    }
+   },
+   "origin": "exp3: [llm] slow boosting: depth 3, lr 0.05, 250 iters, leaf floor 20"
+  },
+  {
+   "seq": 17,
+   "t": 1789200570.2135117,
+   "stage": "experiment_result",
+   "id": 4,
+   "ok": true,
+   "metrics": {
+    "f1_macro": 0.6816593330409315,
+    "accuracy": 0.75,
+    "precision": 0.4387755102040816,
+    "recall": 0.6825396825396826,
+    "roc_auc": 0.8119349005424955,
+    "pr_auc": 0.5732569391803927,
+    "positive_class": "1",
+    "train_f1_macro": 0.7892207860487421,
+    "overfit_gap": 0.10756145300781061,
+    "per_class_recall": {
+     "0": 0.7679324894514767,
+     "1": 0.6825396825396826
+    },
+    "confusion_matrix": [
+     [
+      182,
+      55
+     ],
+     [
+      20,
+      43
+     ]
+    ],
+    "labels": [
+     "0",
+     "1"
+    ],
+    "test_rows": 300,
+    "predicted_classes": 2
+   },
+   "error": null,
+   "seconds": 0.281
+  },
+  {
+   "seq": 18,
+   "t": 1789200570.2135522,
+   "stage": "diagnosis",
+   "id": 4,
+   "category": "insufficient",
+   "summary": "trained cleanly but gain +0.006 is below the 0.01 threshold",
+   "findings": []
+  },
+  {
+   "seq": 19,
+   "t": 1789200570.214251,
+   "stage": "hypothesis",
+   "id": 4,
+   "problem": "the last experiment leaves the objective short of its ceiling",
+   "proposed_change": "escalate to random_forest, 500 trees with log2 feature sampling",
+   "reasoning": "experiment 4 measured 0.6816593330409315 with no blocking defect; random_forest explores non-linear structure the current family cannot reach",
+   "expected_effect": "a higher primary metric than the current best",
+   "next_config": {
+    "model": "random_forest",
+    "params": {
+     "class_weight": "balanced",
+     "n_estimators": 500,
+     "min_samples_leaf": 3,
+     "max_features": "log2"
+    },
+    "preprocess": {
+     "impute": "most_frequent",
+     "scale": false
+    }
+   },
+   "source": "llm",
+   "cites": [
+    "score"
+   ],
+   "rejected": []
+  },
+  {
+   "seq": 20,
+   "t": 1789200570.214279,
+   "stage": "decision",
+   "id": 4,
+   "action": "continue",
+   "reason": "testing next hypothesis: escalate to random_forest, 500 trees with log2 feature sampling"
+  },
+  {
+   "seq": 21,
+   "t": 1789200570.2142918,
+   "stage": "experiment_start",
+   "id": 5,
+   "config": {
+    "model": "random_forest",
+    "params": {
+     "class_weight": "balanced",
+     "n_estimators": 500,
+     "min_samples_leaf": 3,
+     "max_features": "log2"
+    },
+    "preprocess": {
+     "impute": "most_frequent",
+     "scale": false
+    }
+   },
+   "origin": "exp4: [llm] escalate to random_forest, 500 trees with log2 feature sampling"
+  },
+  {
+   "seq": 22,
+   "t": 1789200571.190364,
+   "stage": "experiment_result",
+   "id": 5,
+   "ok": true,
+   "metrics": {
+    "f1_macro": 0.6769863862298854,
+    "accuracy": 0.7566666666666667,
+    "precision": 0.4431818181818182,
+    "recall": 0.6190476190476191,
+    "roc_auc": 0.7759694595137633,
+    "pr_auc": 0.5236076160037932,
+    "positive_class": "1",
+    "train_f1_macro": 0.8585123585123585,
+    "overfit_gap": 0.18152597228247314,
+    "per_class_recall": {
+     "0": 0.7932489451476793,
+     "1": 0.6190476190476191
+    },
+    "confusion_matrix": [
+     [
+      188,
+      49
+     ],
+     [
+      24,
+      39
+     ]
+    ],
+    "labels": [
+     "0",
+     "1"
+    ],
+    "test_rows": 300,
+    "predicted_classes": 2
+   },
+   "error": null,
+   "seconds": 0.975
+  },
+  {
+   "seq": 23,
+   "t": 1789200571.1903968,
+   "stage": "diagnosis",
+   "id": 5,
+   "category": "model_issue",
+   "summary": "no gain (0.677 vs best 0.682); model issues identified",
+   "findings": [
+    "overfitting: train f1 exceeds test f1 by 0.182"
+   ]
+  },
+  {
+   "seq": 24,
+   "t": 1789200571.1907988,
+   "stage": "hypothesis",
+   "id": 5,
+   "problem": "the last experiment leaves the objective short of its ceiling",
+   "proposed_change": "shallow forest: depth 4, leaf floor 20, 400 trees",
+   "reasoning": "train f1 exceeds test f1 by 0.182 at a measured f1_macro of 0.6769863862298854, so the ceiling is variance, not capacity",
+   "expected_effect": "a smaller gap at similar or better score",
+   "next_config": {
+    "model": "random_forest",
+    "params": {
+     "class_weight": "balanced",
+     "n_estimators": 400,
+     "min_samples_leaf": 20,
+     "max_features": "log2",
+     "max_depth": 4
+    },
+    "preprocess": {
+     "impute": "most_frequent",
+     "scale": false
+    }
+   },
+   "source": "llm",
+   "cites": [
+    "overfitting: train f1 exceeds test f1 by 0.182"
+   ],
+   "rejected": []
+  },
+  {
+   "seq": 25,
+   "t": 1789200571.1908164,
+   "stage": "decision",
+   "id": 5,
+   "action": "continue",
+   "reason": "testing next hypothesis: shallow forest: depth 4, leaf floor 20, 400 trees"
+  },
+  {
+   "seq": 26,
+   "t": 1789200571.1908226,
+   "stage": "experiment_start",
+   "id": 6,
+   "config": {
+    "model": "random_forest",
+    "params": {
+     "class_weight": "balanced",
+     "n_estimators": 400,
+     "min_samples_leaf": 20,
+     "max_features": "log2",
+     "max_depth": 4
+    },
+    "preprocess": {
+     "impute": "most_frequent",
+     "scale": false
+    }
+   },
+   "origin": "exp5: [llm] shallow forest: depth 4, leaf floor 20, 400 trees"
+  },
+  {
+   "seq": 27,
+   "t": 1789200571.9070487,
+   "stage": "experiment_result",
+   "id": 6,
+   "ok": true,
+   "metrics": {
+    "f1_macro": 0.6413823081938709,
+    "accuracy": 0.7066666666666667,
+    "precision": 0.3853211009174312,
+    "recall": 0.6666666666666666,
+    "roc_auc": 0.7913066773826267,
+    "pr_auc": 0.5714779796330984,
+    "positive_class": "1",
+    "train_f1_macro": 0.6853122182587903,
+    "overfit_gap": 0.04392991006491942,
+    "per_class_recall": {
+     "0": 0.7172995780590717,
+     "1": 0.6666666666666666
+    },
+    "confusion_matrix": [
+     [
+      170,
+      67
+     ],
+     [
+      21,
+      42
+     ]
+    ],
+    "labels": [
+     "0",
+     "1"
+    ],
+    "test_rows": 300,
+    "predicted_classes": 2
+   },
+   "error": null,
+   "seconds": 0.716
+  },
+  {
+   "seq": 28,
+   "t": 1789200571.9070773,
+   "stage": "diagnosis",
+   "id": 6,
+   "category": "insufficient",
+   "summary": "trained cleanly but gain -0.040 is below the 0.01 threshold",
+   "findings": []
+  },
+  {
+   "seq": 29,
+   "t": 1789200571.907547,
+   "stage": "hypothesis",
+   "id": 6,
+   "problem": "trained cleanly but gain -0.040 is below the 0.01 threshold",
+   "proposed_change": null,
+   "source": null,
+   "cites": [],
+   "rejected": [
+    {
+     "source": "llm",
+     "reason": "duplicate: already run as experiment 5"
+    }
+   ]
+  },
+  {
+   "seq": 30,
+   "t": 1789200571.9075518,
+   "stage": "decision",
+   "id": 6,
+   "action": "stop",
+   "reason": "experiment budget reached (6)"
+  },
+  {
+   "seq": 31,
+   "t": 1789200571.9075701,
+   "stage": "mission_end",
+   "experiments": 6,
+   "best_id": 4,
+   "best_score": 0.6816593330409315,
+   "best_config": {
+    "model": "hist_gb",
+    "params": {
+     "class_weight": "balanced",
+     "learning_rate": 0.05,
+     "max_iter": 250,
+     "min_samples_leaf": 20,
+     "max_depth": 3
+    },
+    "preprocess": {
+     "impute": "most_frequent",
+     "scale": false
+    }
+   },
+   "objective": {
+    "primary_metric": "f1_macro",
+    "direction": "maximize",
+    "secondary_metrics": [
+     "accuracy",
+     "precision",
+     "recall",
+     "roc_auc",
+     "pr_auc"
+    ]
+   },
+   "reason": "experiment budget reached (6)"
+  }
+ ],
+ "summary": {
+  "experiments": 6,
+  "best_id": 4,
+  "best_score": 0.6816593330409315,
+  "best_model": "hist_gb",
+  "objective": {
+   "primary_metric": "f1_macro",
+   "direction": "maximize",
+   "secondary_metrics": [
+    "accuracy",
+    "precision",
+    "recall",
+    "roc_auc",
+    "pr_auc"
+   ]
+  },
+  "stop_reason": "experiment budget reached (6)",
+  "timeline": [
+   {
+    "id": 1,
+    "model": "logreg",
+    "params": {},
+    "score": 0.5845380111275784,
+    "primary_metric": "f1_macro",
+    "category": "model_issue",
+    "decision": "revise",
+    "origin": "baseline"
+   },
+   {
+    "id": 2,
+    "model": "logreg",
+    "params": {
+     "class_weight": "balanced"
+    },
+    "score": 0.589088441992345,
+    "primary_metric": "f1_macro",
+    "category": "insufficient",
+    "decision": "revise",
+    "origin": "exp1: [llm] reweight the loss with class_weight='balanced' and impute categorically by mode"
+   },
+   {
+    "id": 3,
+    "model": "hist_gb",
+    "params": {
+     "class_weight": "balanced",
+     "learning_rate": 0.04,
+     "max_iter": 300,
+     "min_samples_leaf": 15
+    },
+    "score": 0.6759410801963994,
+    "primary_metric": "f1_macro",
+    "category": "improvement",
+    "decision": "continue",
+    "origin": "exp2: [llm] escalate to hist_gb, slow and heavily regularised (lr 0.04, 300 iters)"
+   },
+   {
+    "id": 4,
+    "model": "hist_gb",
+    "params": {
+     "class_weight": "balanced",
+     "learning_rate": 0.05,
+     "max_iter": 250,
+     "min_samples_leaf": 20,
+     "max_depth": 3
+    },
+    "score": 0.6816593330409315,
+    "primary_metric": "f1_macro",
+    "category": "insufficient",
+    "decision": "continue",
+    "origin": "exp3: [llm] slow boosting: depth 3, lr 0.05, 250 iters, leaf floor 20"
+   },
+   {
+    "id": 5,
+    "model": "random_forest",
+    "params": {
+     "class_weight": "balanced",
+     "n_estimators": 500,
+     "min_samples_leaf": 3,
+     "max_features": "log2"
+    },
+    "score": 0.6769863862298854,
+    "primary_metric": "f1_macro",
+    "category": "model_issue",
+    "decision": "continue",
+    "origin": "exp4: [llm] escalate to random_forest, 500 trees with log2 feature sampling"
+   },
+   {
+    "id": 6,
+    "model": "random_forest",
+    "params": {
+     "class_weight": "balanced",
+     "n_estimators": 400,
+     "min_samples_leaf": 20,
+     "max_features": "log2",
+     "max_depth": 4
+    },
+    "score": 0.6413823081938709,
+    "primary_metric": "f1_macro",
+    "category": "insufficient",
+    "decision": "stop",
+    "origin": "exp5: [llm] shallow forest: depth 4, leaf floor 20, 400 trees"
+   }
+  ]
+ }
+}
