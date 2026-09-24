@@ -1,0 +1,11 @@
+pandas
+numpy
+scikit-learn
+
+# LLM hypothesis proposer (optional at runtime: ATLAS falls back to the
+# deterministic engine when absent). Only llm_client.py imports groq.
+groq
+python-dotenv
+
+# Tests
+pytest

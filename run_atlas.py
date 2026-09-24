@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import argparse
 import json
 import sys
@@ -12,40 +15,11 @@ from atlas.decision import Budget
 from atlas.loop import mission
 from atlas.objective import UNAVAILABLE
 from atlas.planner import MissionPlan
+from llm_client import DEFAULT_LLM_MODEL, groq_proposer
 
 BAR = "-" * 72
-DEFAULT_LLM_MODEL = "claude-opus-5"
 
 
-def anthropic_proposer(model: str, timeout: float = 120.0) -> Callable[[dict], str]:
-    """One concrete client for --llm. Lives here, outside the atlas package.
-
-    The core stays provider-independent: atlas.hypothesis knows only
-    Callable[[dict], str], so swapping providers means replacing this function
-    and nothing else.
-
-    The raw text is handed back unparsed on purpose — atlas.llm.validate() owns
-    the proposal schema, and declaring it a second time as a structured-output
-    JSON schema here would be two sources of truth for the same shape.
-    """
-    try:
-        import anthropic
-    except ModuleNotFoundError as exc:  # pragma: no cover - environment-dependent
-        raise SystemExit("--llm requires the anthropic package: pip install anthropic") from exc
-
-    client = anthropic.Anthropic(timeout=timeout)
-
-    def propose(payload: dict) -> str:
-        message = client.messages.create(
-            model=model,
-            max_tokens=16000,
-            thinking={"type": "adaptive"},
-            system=llm.SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": json.dumps(payload, indent=2)}],
-        )
-        return "".join(block.text for block in message.content if block.type == "text")
-
-    return propose
 
 
 def show_plan(plan: MissionPlan) -> None:
@@ -157,7 +131,7 @@ def main() -> int:
         nargs="?",
         const=DEFAULT_LLM_MODEL,
         default=None,
-        help=f"propose hypotheses with this Claude model (default {DEFAULT_LLM_MODEL}); "
+        help=f"propose hypotheses with this Groq model (default {DEFAULT_LLM_MODEL}); "
         "proposals are still validated and can be rejected",
     )
     args = parser.parse_args()
@@ -177,7 +151,7 @@ def main() -> int:
     max_experiments = args.max_experiments or (mission_plan.experiment_budget if mission_plan else None) or 6
 
     budget = Budget(max_experiments=max_experiments, target_score=args.target_score)
-    proposer = anthropic_proposer(args.llm) if args.llm else None
+    proposer = groq_proposer(args.llm) if args.llm else None
     try:
         run = mission(args.csv, target, budget=budget, sink=printer(), plan=mission_plan, llm=proposer)
     except (FileNotFoundError, ValueError) as exc:
