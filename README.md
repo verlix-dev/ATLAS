@@ -158,8 +158,8 @@ python make_data.py               # generates the demo datasets
 To enable the optional LLM-assisted hypothesis proposer:
 
 ```bash
-pip install anthropic
-export ANTHROPIC_API_KEY=your-key-here
+pip install groq
+export GROQ_API_KEY=your-key-here
 ```
 
 ATLAS runs fully offline without this step. The deterministic hypothesis engine
