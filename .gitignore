@@ -25,6 +25,9 @@ env/
 # Graphify generated output
 graphify-out/
 
+# User-uploaded datasets (runtime state, never source)
+uploads/
+
 # OS
 .DS_Store
 Thumbs.db

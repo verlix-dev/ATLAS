@@ -1,107 +1,239 @@
-import { useState, useRef, useCallback } from 'react';
-import type { MissionConfig } from '../types';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { fetchDatasets, fetchPlan, uploadDataset, type StartMissionBody } from '../lib/api';
+import type { DatasetListing, MissionPlan } from '../types';
 
 interface Props {
-  onStart: (config: MissionConfig) => void;
+  /** Resolves to the real mission id, or null when the backend refused it. */
+  onStart: (body: StartMissionBody) => Promise<string | null>;
+  starting: boolean;
+  startError: string | null;
 }
 
-const EXAMPLE_DATASETS = [
-  { name: 'churn.csv', rows: 400, columns: 21, target: 'churned', missing: '2.1%', classes: { 'Not Churned': '72%', 'Churned': '28%' } },
-  { name: 'fraud_transactions.csv', rows: 1240, columns: 31, target: 'is_fraud', missing: '0.4%', classes: { 'Legitimate': '89%', 'Fraud': '11%' } },
-  { name: 'employee_attrition.csv', rows: 1470, columns: 35, target: 'attrition', missing: '0.0%', classes: { 'No': '84%', 'Yes': '16%' } },
-];
-
 const EXAMPLE_TASKS = [
-  "Predict whether a customer will churn. Prioritize catching potential churners while maintaining reasonable precision.",
-  "Detect fraudulent transactions. Missing real fraud is far more costly than false alarms.",
-  "Identify employees at risk of leaving. Focus on recall to ensure at-risk employees aren't missed.",
+  'Predict whether a customer will churn. Missing a churner is more costly than a false alarm.',
+  'Detect fraudulent transactions. Missing real fraud is far more costly than a false alarm.',
 ];
 
-function AtlasUnderstandsPanel({ task, maxExp, aiGuided, dataset }: { task: string; maxExp: number; aiGuided: boolean; dataset: { name: string; target: string } | null }) {
-  if (!task.trim() && !dataset) return null;
+/** Shortest task the Planner is asked to read. One constant, so the gate that
+ *  starts planning and the gate that enables Start can never disagree. */
+const MIN_TASK_CHARS = 10;
 
-  const problemType = task.toLowerCase().includes('fraud') ? 'Binary Classification' :
-    task.toLowerCase().includes('churn') ? 'Binary Classification' :
-    task.toLowerCase().includes('predict') ? 'Binary Classification' : 'Binary Classification';
-  const target = dataset?.target || 'auto-detected';
-  const metric = task.toLowerCase().includes('recall') || task.toLowerCase().includes('miss') ? 'F1 Macro' : 'F1 Macro';
-  const priority = task.toLowerCase().includes('recall') || task.toLowerCase().includes('miss') || task.toLowerCase().includes('catching') ?
-    'Minimize false negatives' : 'Balance precision/recall';
+/**
+ * "ATLAS Understands" — rendered from the real Planner, never from heuristics.
+ * While the task is empty or being planned the panel says so, rather than
+ * inventing a metric.
+ */
+function AtlasUnderstandsPanel({
+  plan,
+  status,
+  maxExp,
+  aiGuided,
+  target,
+}: {
+  plan: MissionPlan | null;
+  status: 'idle' | 'planning' | 'ready' | 'error';
+  maxExp: number;
+  aiGuided: boolean;
+  target: string;
+}) {
+  if (status === 'idle') {
+    return (
+      <div className="card-elevated p-6">
+        <div className="text-xs font-semibold tracking-widest uppercase text-gray-400 mb-3">
+          ATLAS Understands
+        </div>
+        <p className="text-sm text-gray-400">
+          Describe a mission objective to see how the Planner interprets it.
+        </p>
+      </div>
+    );
+  }
+
+  if (status === 'planning') {
+    return (
+      <div className="card-elevated p-6">
+        <div className="text-xs font-semibold tracking-widest uppercase text-gray-400 mb-3">
+          ATLAS Understands
+        </div>
+        <p className="text-sm text-gray-400">Reading the objective…</p>
+      </div>
+    );
+  }
+
+  if (status === 'error' || !plan) {
+    return (
+      <div className="card-elevated p-6">
+        <div className="text-xs font-semibold tracking-widest uppercase text-gray-400 mb-3">
+          ATLAS Understands
+        </div>
+        <p className="text-sm text-orange-500">
+          The Planner could not interpret this objective. Try describing the problem more concretely.
+        </p>
+      </div>
+    );
+  }
+
+  const facts = [
+    { label: 'Problem type', value: plan.problem_type ?? 'not stated' },
+    { label: 'Target', value: plan.target_candidate ?? `auto (${target || 'inferred'})` },
+    { label: 'Primary metric', value: plan.primary_metric.replace(/_/g, ' ') },
+    { label: 'Priority', value: plan.priority ?? 'none stated' },
+    { label: 'Budget', value: `≤ ${plan.experiment_budget ?? maxExp} experiments` },
+    { label: 'Strategy', value: aiGuided ? 'AI Guided' : 'Deterministic Rules' },
+  ];
 
   return (
-    <div className="card-elevated p-6 animate-in" style={{ animationDelay: '0.1s' }}>
+    <div className="card-elevated p-6 animate-in">
       <div className="flex items-center gap-2 mb-5">
-        <div className="w-2 h-2 rounded-full bg-emerald-500" style={{ animation: 'pulse-ring 2s infinite' }} />
-        <span className="text-xs font-semibold tracking-widest uppercase text-emerald-600">ATLAS Understands</span>
+        <div className="w-2 h-2 rounded-full bg-emerald-500" />
+        <span className="text-xs font-semibold tracking-widest uppercase text-emerald-600">
+          ATLAS Understands
+        </span>
+        <span className="ml-auto text-[10px] font-mono text-gray-400 uppercase">
+          {plan.metric_confidence}
+        </span>
       </div>
+
       <div className="grid grid-cols-2 gap-4">
-        {[
-          { label: 'Problem', value: problemType },
-          { label: 'Target', value: <span className="font-mono text-sm text-indigo-600">{target}</span> },
-          { label: 'Primary Metric', value: metric },
-          { label: 'Priority', value: priority },
-          { label: 'Experiment Budget', value: `≤ ${maxExp} experiments` },
-          { label: 'Strategy', value: aiGuided ? 'AI Guided' : 'Deterministic Rules' },
-        ].map(({ label, value }) => (
+        {facts.map(({ label, value }) => (
           <div key={label}>
-            <div className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-1">{label}</div>
-            <div className="text-sm font-semibold text-gray-800">{value}</div>
+            <div className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-1">
+              {label}
+            </div>
+            <div className="text-sm font-semibold text-gray-800 font-mono">{value}</div>
           </div>
         ))}
       </div>
+
+      {/* The Planner's own justification, verbatim. */}
+      <div className="mt-5 pt-4 border-t border-indigo-50">
+        <div className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-1">
+          Why this metric
+        </div>
+        <p className="text-xs text-gray-600 leading-relaxed">{plan.metric_reason}</p>
+      </div>
+
+      {plan.constraints.length > 0 && (
+        <div className="mt-4">
+          <div className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-1">
+            Constraints
+          </div>
+          <ul className="text-xs text-gray-600 space-y-1">
+            {plan.constraints.map((c) => (
+              <li key={c}>— {c}</li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
 
-export default function MissionSetup({ onStart }: Props) {
-  const [dragActive, setDragActive] = useState(false);
-  const [uploadedFile, setUploadedFile] = useState<typeof EXAMPLE_DATASETS[0] | null>(null);
-  const [selectedDataset, setSelectedDataset] = useState<string>('');
+export default function MissionSetup({ onStart, starting, startError }: Props) {
+  const [datasets, setDatasets] = useState<DatasetListing[]>([]);
+  const [datasetError, setDatasetError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string>('');
   const [task, setTask] = useState('');
   const [maxExperiments, setMaxExperiments] = useState(6);
-  const [aiGuided, setAiGuided] = useState(true);
+  const [aiGuided, setAiGuided] = useState(false);
+  const [target, setTarget] = useState('');
+  const [plan, setPlan] = useState<MissionPlan | null>(null);
+  const [planStatus, setPlanStatus] = useState<'idle' | 'planning' | 'ready' | 'error'>('idle');
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [target, setTarget] = useState('auto');
-  const [launching, setLaunching] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploaded, setUploaded] = useState<DatasetListing | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const planTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const activeDataset = uploadedFile || EXAMPLE_DATASETS.find(d => d.name === selectedDataset) || null;
+  // The dataset list is whatever the backend actually has on disk.
+  useEffect(() => {
+    let cancelled = false;
+    fetchDatasets()
+      .then((rows) => {
+        if (cancelled) return;
+        setDatasets(rows);
+        if (rows.length) setSelected(rows[0].csv);
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled) {
+          setDatasetError(cause instanceof Error ? cause.message : String(cause));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDragActive(false);
-    const file = e.dataTransfer.files[0];
-    if (file && file.name.endsWith('.csv')) {
-      setUploadedFile({ name: file.name, rows: 400, columns: 21, target: 'churned', missing: '2.1%', classes: { 'Not Churned': '72%', 'Churned': '28%' } });
-      setSelectedDataset('');
+  // Debounced planner call. Every displayed value comes from the response.
+  useEffect(() => {
+    if (planTimer.current) clearTimeout(planTimer.current);
+    const trimmed = task.trim();
+    if (trimmed.length < MIN_TASK_CHARS) {
+      setPlan(null);
+      setPlanStatus('idle');
+      return;
+    }
+    setPlanStatus('planning');
+    planTimer.current = setTimeout(() => {
+      fetchPlan(trimmed)
+        .then((result) => {
+          setPlan(result);
+          setPlanStatus(result ? 'ready' : 'error');
+          if (result?.experiment_budget) setMaxExperiments(result.experiment_budget);
+        })
+        .catch(() => {
+          setPlan(null);
+          setPlanStatus('error');
+        });
+    }, 350);
+    return () => {
+      if (planTimer.current) clearTimeout(planTimer.current);
+    };
+  }, [task]);
+
+  const activeDataset = datasets.find((d) => d.csv === selected) ?? null;
+  const canStart =
+    Boolean(activeDataset) && task.trim().length >= MIN_TASK_CHARS && planStatus !== 'planning';
+
+  /**
+   * Upload, then select. The new row comes straight from the backend response,
+   * so the list shows what the server actually stored — nothing is optimistically
+   * invented client-side.
+   */
+  const handleFile = useCallback(async (file: File | undefined) => {
+    if (!file) return;
+    setUploadError(null);
+    setUploaded(null);
+    setUploading(true);
+    try {
+      const dataset = await uploadDataset(file);
+      setDatasets((rows) => [...rows.filter((r) => r.csv !== dataset.csv), dataset]);
+      setSelected(dataset.csv);
+      setUploaded(dataset);
+    } catch (cause) {
+      setUploadError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setUploading(false);
+      // Let the same file be picked again after a failure.
+      if (fileInput.current) fileInput.current.value = '';
     }
   }, []);
 
-  const handleStart = () => {
-    if (!activeDataset || !task.trim()) return;
-    setLaunching(true);
-    setTimeout(() => {
-      onStart({
-        task,
-        dataset: activeDataset.name,
-        rows: activeDataset.rows,
-        columns: activeDataset.columns,
-        target: target === 'auto' ? activeDataset.target : target,
-        maxExperiments,
-        aiGuided,
-        problemType: 'Binary Classification',
-        primaryMetric: 'F1 Macro',
-        priority: task.toLowerCase().includes('catching') || task.toLowerCase().includes('miss') ?
-          'Minimize false negatives' : 'Balance precision/recall',
-      });
-    }, 600);
-  };
-
-  const canStart = !!activeDataset && task.trim().length > 10;
+  const handleStart = useCallback(() => {
+    if (!activeDataset || !canStart) return;
+    void onStart({
+      csv: activeDataset.csv,
+      target: target.trim() || null,
+      task: task.trim(),
+      budget: maxExperiments,
+      // The backend field is `llm`; "offline" selects the LLM-guided proposer.
+      llm: aiGuided ? 'offline' : null,
+    });
+  }, [activeDataset, canStart, onStart, target, task, maxExperiments, aiGuided]);
 
   return (
     <div className="min-h-screen" style={{ background: 'linear-gradient(160deg, #F4F6FF 0%, #EEF1FF 40%, #F8F6FF 100%)' }}>
-      {/* Header */}
       <header className="border-b border-indigo-100" style={{ background: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(12px)', position: 'sticky', top: 0, zIndex: 50 }}>
         <div className="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -112,14 +244,12 @@ export default function MissionSetup({ onStart }: Props) {
               </svg>
             </div>
             <span className="font-bold text-gray-900 tracking-tight">ATLAS</span>
-            <span className="text-xs text-gray-400 font-medium">Autonomous Training, Learning & Analytics System</span>
+            <span className="text-xs text-gray-400 font-medium">Autonomous Training, Learning &amp; Analytics System</span>
           </div>
-          <div className="text-xs font-mono text-indigo-400 bg-indigo-50 px-3 py-1 rounded-full">v2.0</div>
         </div>
       </header>
 
       <div className="max-w-6xl mx-auto px-6 py-12">
-        {/* Hero */}
         <div className="mb-12 text-center">
           <div className="inline-flex items-center gap-2 bg-indigo-50 border border-indigo-100 rounded-full px-4 py-1.5 mb-6">
             <div className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
@@ -135,135 +265,131 @@ export default function MissionSetup({ onStart }: Props) {
         </div>
 
         <div className="grid grid-cols-5 gap-8">
-          {/* Left — main config */}
           <div className="col-span-3 flex flex-col gap-6">
-
-            {/* Dataset */}
+            {/* 01 — Dataset */}
             <div className="card p-6">
               <h2 className="text-sm font-bold text-gray-700 uppercase tracking-widest mb-5">01 — Dataset</h2>
 
-              {/* Upload zone */}
-              <div
-                className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all duration-200 mb-4 ${dragActive ? 'drag-active border-indigo-500 bg-indigo-50/40' : 'border-indigo-100 hover:border-indigo-300 hover:bg-indigo-50/20'}`}
-                onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
-                onDragLeave={() => setDragActive(false)}
-                onDrop={handleDrop}
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) {
-                    setUploadedFile({ name: file.name, rows: 400, columns: 21, target: 'churned', missing: '2.1%', classes: { 'Not Churned': '72%', 'Churned': '28%' } });
-                    setSelectedDataset('');
-                  }
-                }} />
-                <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center mx-auto mb-3">
-                  <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                    <path d="M10 2v10M6 6l4-4 4 4" stroke="#6366F1" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                    <path d="M3 14v2a1 1 0 001 1h12a1 1 0 001-1v-2" stroke="#6366F1" strokeWidth="1.5" strokeLinecap="round" />
-                  </svg>
+              {datasetError && (
+                <div className="mb-4 p-4 rounded-xl bg-orange-50 border border-orange-200 text-xs text-orange-700">
+                  Could not reach the backend: {datasetError}
                 </div>
-                <p className="text-sm font-semibold text-gray-600 mb-1">Drop your dataset here</p>
-                <p className="text-xs text-gray-400">CSV files supported · or <span className="text-indigo-500 font-medium">Browse files</span></p>
-              </div>
+              )}
 
-              {/* Or choose existing */}
-              <div className="relative flex items-center gap-3 mb-4">
-                <div className="flex-1 h-px bg-gray-100" />
-                <span className="text-xs text-gray-400 font-medium">or choose existing</span>
-                <div className="flex-1 h-px bg-gray-100" />
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                {EXAMPLE_DATASETS.map(ds => (
+              {/* Real datasets from GET /api/datasets — the repo's demo CSVs
+                  plus anything uploaded, both discovered server-side. */}
+              <div className="grid gap-2">
+                {datasets.map((ds) => (
                   <button
-                    key={ds.name}
-                    onClick={() => { setSelectedDataset(ds.name); setUploadedFile(null); }}
-                    className={`p-3 rounded-xl border text-left transition-all duration-150 text-xs ${selectedDataset === ds.name
+                    key={ds.csv}
+                    onClick={() => setSelected(ds.csv)}
+                    className={`p-3 rounded-xl border text-left transition-all duration-150 text-xs flex items-center gap-3 ${selected === ds.csv
                       ? 'border-indigo-400 bg-indigo-50 text-indigo-700'
                       : 'border-gray-100 hover:border-indigo-200 hover:bg-indigo-50/30 text-gray-600'}`}
                   >
-                    <div className="font-mono font-semibold truncate mb-1">{ds.name}</div>
-                    <div className="text-gray-400">{ds.rows} rows · {ds.columns} cols</div>
+                    <span className="font-mono font-semibold">{ds.name}</span>
+                    {ds.source === 'upload' && (
+                      <span className="text-[10px] font-bold uppercase tracking-wider bg-violet-100 text-violet-600 px-1.5 py-0.5 rounded">
+                        yours
+                      </span>
+                    )}
+                    <span className="ml-auto text-gray-400">
+                      {(ds.bytes / 1024).toFixed(1)} KB
+                    </span>
                   </button>
                 ))}
+                {!datasets.length && !datasetError && (
+                  <div className="text-xs text-gray-400">Loading datasets…</div>
+                )}
               </div>
 
-              {/* Dataset preview */}
-              {activeDataset && (
-                <div className="mt-4 p-4 rounded-xl bg-indigo-50/50 border border-indigo-100 animate-in">
-                  <div className="flex items-center gap-2 mb-3">
-                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                      <path d="M7 1L13 4V10L7 13L1 10V4L7 1Z" stroke="#4F46E5" strokeWidth="1.2" />
-                      <circle cx="7" cy="7" r="1.5" fill="#4F46E5" />
-                    </svg>
-                    <span className="text-xs font-bold text-indigo-700 uppercase tracking-wider">Dataset Analysis</span>
+              {/* Upload — the same list, one more row once it lands. */}
+              <div className="mt-4 pt-4 border-t border-gray-100">
+                <div className="text-xs font-semibold text-gray-500 mb-2">Upload your own CSV</div>
+                <input
+                  ref={fileInput}
+                  type="file"
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  onChange={(e) => void handleFile(e.target.files?.[0])}
+                />
+                <button
+                  onClick={() => fileInput.current?.click()}
+                  disabled={uploading}
+                  className={`text-xs font-semibold px-3 py-2 rounded-xl border transition-colors ${uploading
+                    ? 'border-gray-100 text-gray-400 cursor-not-allowed'
+                    : 'border-indigo-200 text-indigo-600 hover:bg-indigo-50'}`}
+                >
+                  {uploading ? 'Uploading…' : 'Browse…'}
+                </button>
+
+                {uploaded && !uploadError && (
+                  <div className="mt-2 text-xs text-emerald-600 font-medium">
+                    ✓ {uploaded.name} uploaded
+                    {uploaded.rows !== undefined && uploaded.columns !== undefined && (
+                      <span className="text-gray-400 font-normal">
+                        {' '}
+                        — {uploaded.rows} rows × {uploaded.columns} columns
+                      </span>
+                    )}
                   </div>
-                  <div className="grid grid-cols-3 gap-3 text-xs">
-                    {[
-                      { label: 'Filename', value: <span className="font-mono">{activeDataset.name}</span> },
-                      { label: 'Rows', value: activeDataset.rows.toLocaleString() },
-                      { label: 'Columns', value: activeDataset.columns },
-                      { label: 'Target', value: <span className="font-mono text-indigo-600">{activeDataset.target}</span> },
-                      { label: 'Missing', value: activeDataset.missing },
-                      { label: 'Status', value: <span className="text-emerald-600 font-semibold">Ready</span> },
-                    ].map(({ label, value }) => (
-                      <div key={label}>
-                        <div className="text-gray-400 mb-0.5">{label}</div>
-                        <div className="font-semibold text-gray-700">{value}</div>
-                      </div>
-                    ))}
+                )}
+                {uploadError && (
+                  <div className="mt-2 p-3 rounded-xl bg-orange-50 border border-orange-200 text-xs text-orange-700">
+                    {uploadError}
                   </div>
-                  <div className="mt-3 pt-3 border-t border-indigo-100">
-                    <div className="text-gray-400 text-xs mb-2">Class Distribution</div>
-                    <div className="flex gap-3">
-                      {Object.entries(activeDataset.classes).map(([cls, pct]) => (
-                        <div key={cls} className="flex items-center gap-1.5">
-                          <div className="w-2 h-2 rounded-full" style={{ background: cls.includes('Not') || cls.includes('Legitimate') || cls.includes('No') ? '#10B981' : '#4F6AF7' }} />
-                          <span className="text-xs text-gray-600">{cls} <span className="font-semibold text-gray-800">{pct}</span></span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
+                )}
+              </div>
+
+              {/* The Data Engineer profiles the dataset at mission start; the
+                  real profile arrives in the mission_start event. */}
+              <p className="mt-4 text-xs text-gray-400 leading-relaxed">
+                ATLAS profiles the dataset with its Data Engineer when the mission starts —
+                rows, dtypes, missingness and class balance come from the file itself.
+              </p>
             </div>
 
-            {/* Task */}
+            {/* 02 — Objective */}
             <div className="card p-6">
               <h2 className="text-sm font-bold text-gray-700 uppercase tracking-widest mb-2">02 — Mission Objective</h2>
-              <p className="text-xs text-gray-400 mb-4 font-medium">Describe what you want ATLAS to accomplish in natural language</p>
-              <div className="relative">
-                <textarea
-                  value={task}
-                  onChange={e => setTask(e.target.value)}
-                  placeholder={"Predict whether a customer will churn. Prioritize catching potential churners while maintaining reasonable precision."}
-                  rows={4}
-                  className="w-full rounded-xl border border-indigo-100 bg-indigo-50/30 px-4 py-3 text-sm text-gray-800 placeholder:text-gray-300 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-300 transition-all"
-                />
-              </div>
+              <p className="text-xs text-gray-400 mb-4 font-medium">
+                Describe what you want ATLAS to accomplish in natural language
+              </p>
+              <textarea
+                value={task}
+                onChange={(e) => setTask(e.target.value)}
+                placeholder="Predict whether a customer will churn. Missing a churner is more costly than a false alarm."
+                rows={4}
+                className="w-full rounded-xl border border-indigo-100 bg-indigo-50/30 px-4 py-3 text-sm text-gray-800 placeholder:text-gray-300 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-300 transition-all"
+              />
               <div className="flex gap-2 mt-2 flex-wrap">
-                {EXAMPLE_TASKS.map(t => (
-                  <button key={t} onClick={() => setTask(t)} className="text-xs text-indigo-500 bg-indigo-50 hover:bg-indigo-100 px-2 py-1 rounded-lg transition-colors truncate max-w-[200px]">
-                    {t.slice(0, 38)}…
+                {EXAMPLE_TASKS.map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => setTask(t)}
+                    className="text-xs text-indigo-500 bg-indigo-50 hover:bg-indigo-100 px-2 py-1 rounded-lg transition-colors truncate max-w-[220px]"
+                  >
+                    {t.slice(0, 42)}…
                   </button>
                 ))}
               </div>
             </div>
 
-            {/* Config */}
+            {/* 03 — Configuration */}
             <div className="card p-6">
               <h2 className="text-sm font-bold text-gray-700 uppercase tracking-widest mb-5">03 — Configuration</h2>
               <div className="grid grid-cols-2 gap-5">
                 <div>
                   <label className="text-xs font-semibold text-gray-500 mb-2 block">Target Column</label>
-                  <select
+                  <input
                     value={target}
-                    onChange={e => setTarget(e.target.value)}
-                    className="w-full rounded-xl border border-gray-100 bg-gray-50/50 px-3 py-2.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-300"
-                  >
-                    <option value="auto">Auto-detect</option>
-                    {activeDataset && <option value={activeDataset.target}>{activeDataset.target}</option>}
-                  </select>
+                    onChange={(e) => setTarget(e.target.value)}
+                    placeholder={plan?.target_candidate ?? 'inferred by Data Engineer'}
+                    className="w-full rounded-xl border border-gray-100 bg-gray-50/50 px-3 py-2.5 text-sm text-gray-700 font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                  />
+                  <p className="text-xs text-gray-400 mt-1">
+                    Leave blank to use the Planner's candidate, or type the exact column name.
+                  </p>
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-gray-500 mb-2 block">
@@ -271,23 +397,27 @@ export default function MissionSetup({ onStart }: Props) {
                   </label>
                   <div className="flex items-center gap-3">
                     <input
-                      type="range" min={2} max={12} value={maxExperiments}
-                      onChange={e => setMaxExperiments(Number(e.target.value))}
+                      type="range" min={1} max={20} value={maxExperiments}
+                      onChange={(e) => setMaxExperiments(Number(e.target.value))}
                       className="flex-1 accent-indigo-600"
                     />
                     <span className="font-mono font-bold text-indigo-700 w-6 text-center">{maxExperiments}</span>
                   </div>
-                  <p className="text-xs text-gray-400 mt-1">ATLAS may stop earlier if the objective is reached</p>
+                  <p className="text-xs text-gray-400 mt-1">A ceiling — ATLAS may stop earlier</p>
                 </div>
               </div>
 
               <div className="mt-5 flex items-center justify-between p-4 rounded-xl bg-gray-50/50 border border-gray-100">
                 <div>
-                  <div className="text-sm font-semibold text-gray-700">AI-Guided Experimentation</div>
-                  <div className="text-xs text-gray-400 mt-0.5">Uses an LLM to generate and evaluate hypotheses</div>
+                  <div className="text-sm font-semibold text-gray-700">LLM Guidance</div>
+                  <div className="text-xs text-gray-400 mt-0.5">
+                    An offline evidence-led proposer runs behind the same validator as the deterministic ladder
+                  </div>
                 </div>
                 <button
                   onClick={() => setAiGuided(!aiGuided)}
+                  aria-pressed={aiGuided}
+                  aria-label="Toggle LLM guidance"
                   className={`relative w-12 h-6 rounded-full transition-all duration-200 ${aiGuided ? 'bg-indigo-500' : 'bg-gray-200'}`}
                 >
                   <div className={`absolute w-5 h-5 rounded-full bg-white shadow top-0.5 transition-all duration-200 ${aiGuided ? 'left-6' : 'left-0.5'}`} />
@@ -305,17 +435,24 @@ export default function MissionSetup({ onStart }: Props) {
               </button>
               {showAdvanced && (
                 <div className="mt-3 p-4 rounded-xl bg-gray-50/50 border border-gray-100 text-xs text-gray-500 animate-in">
-                  Advanced options such as custom metric functions, hyperparameter search spaces, and hardware configuration are available via the ATLAS API.
+                  ATLAS currently supports three model families — logistic regression, random forest
+                  and histogram gradient boosting — with median/mode imputation, optional scaling and
+                  one-hot encoding. Model choice and hyperparameters are decided by the hypothesis engine.
                 </div>
               )}
             </div>
           </div>
 
-          {/* Right — live preview */}
+          {/* Right — planner + CTA */}
           <div className="col-span-2 flex flex-col gap-6">
-            <AtlasUnderstandsPanel task={task} maxExp={maxExperiments} aiGuided={aiGuided} dataset={activeDataset} />
+            <AtlasUnderstandsPanel
+              plan={plan}
+              status={planStatus}
+              maxExp={maxExperiments}
+              aiGuided={aiGuided}
+              target={target}
+            />
 
-            {/* How ATLAS works */}
             <div className="card p-6">
               <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-4">How ATLAS Works</h3>
               {['Experiment', 'Measure', 'Diagnose', 'Hypothesize', 'Decide'].map((step, i) => (
@@ -326,22 +463,27 @@ export default function MissionSetup({ onStart }: Props) {
                   <div>
                     <div className="text-sm font-semibold text-gray-700">{step}</div>
                     <div className="text-xs text-gray-400 mt-0.5">
-                      {['Train a model on the dataset', 'Evaluate metrics on holdout set', 'Analyze failures and patterns', 'Generate a testable theory', 'Choose: Continue, Revise, or Stop'][i]}
+                      {[
+                        'Train a model on the dataset',
+                        'Evaluate metrics on the held-out split',
+                        'Classify what actually happened',
+                        'Propose the next configuration',
+                        'Continue, Revise, or Stop',
+                      ][i]}
                     </div>
                   </div>
                 </div>
               ))}
             </div>
 
-            {/* CTA */}
             <button
               onClick={handleStart}
-              disabled={!canStart || launching}
-              className={`w-full rounded-2xl py-5 font-bold text-base tracking-wide text-white transition-all duration-300 relative overflow-hidden group ${canStart && !launching
+              disabled={!canStart || starting}
+              className={`w-full rounded-2xl py-5 font-bold text-base tracking-wide text-white transition-all duration-300 relative overflow-hidden group ${canStart && !starting
                 ? 'gradient-primary hover:shadow-lg hover:shadow-indigo-200 hover:-translate-y-0.5 active:translate-y-0'
                 : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
             >
-              {launching ? (
+              {starting ? (
                 <span className="flex items-center justify-center gap-2">
                   <svg className="animate-spin w-4 h-4" viewBox="0 0 16 16" fill="none">
                     <circle cx="8" cy="8" r="6" stroke="white" strokeWidth="2" strokeOpacity="0.3" />
@@ -358,9 +500,19 @@ export default function MissionSetup({ onStart }: Props) {
                 </span>
               )}
             </button>
-            {!canStart && (
-              <p className="text-xs text-gray-400 text-center -mt-3">
-                {!activeDataset ? 'Select or upload a dataset to continue' : 'Describe your mission objective above'}
+
+            {startError && (
+              <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700">
+                {startError}
+              </div>
+            )}
+            {!canStart && !startError && (
+              <p className="text-xs text-gray-400 text-center">
+                {!activeDataset
+                  ? 'Select a dataset to continue'
+                  : planStatus === 'planning'
+                    ? 'Reading your objective…'
+                    : 'Describe your mission objective above'}
               </p>
             )}
           </div>

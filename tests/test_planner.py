@@ -52,6 +52,30 @@ def test_no_target_mentioned_stays_none() -> None:
     assert p.target_candidate is None
 
 
+def test_interrogative_phrasing_names_no_column() -> None:
+    """'predict whether X will Y' describes an outcome, it does not name a column.
+
+    The captured phrase is pure scaffolding ('whether a customer'), so the
+    Planner must decline rather than hand load() a function word as an EXPLICIT
+    target -- which aborts the mission before the Data Engineer ever runs.
+    """
+    for task in (
+        "Predict whether a customer will churn.",
+        "Predict if a customer will churn.",
+        "Predict whether or not a customer will churn.",
+    ):
+        assert plan(task).target_candidate is None, task
+
+
+def test_declining_a_candidate_leaves_the_data_engineer_in_charge() -> None:
+    """The real end-to-end path: no candidate, so the target is inferred."""
+    p = plan("Predict whether a customer will churn. Missing a churner is more costly than a false alarm.")
+    assert p.target_candidate is None
+    data = load("data/churn.csv", p.target_candidate)
+    assert data.profile.target == "churned"  # the Data Engineer's own inference
+    assert data.profile.target_confidence is TargetConfidence.INFERRED
+
+
 def test_target_candidate_preserves_source_casing() -> None:
     """The candidate is passed to load() verbatim, so casing must survive."""
     assert plan("The target is Churned.").target_candidate == "Churned"

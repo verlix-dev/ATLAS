@@ -52,12 +52,21 @@ REGRESSION_CUES = (
 # Words that are never the target itself, only scaffolding around it.
 # Prepositions and connectives matter: they terminate a captured phrase, so
 # "predict customer churn from usage data" yields 'churn', not 'from'.
+#
+# Interrogative and modal scaffolding matters for the same reason, one step
+# earlier: "predict whether a customer will churn" captures 'whether a customer',
+# and without these words _pick() would return 'whether' -- a function word that
+# is not a column in any dataset, yet would be handed to load() as an EXPLICIT
+# target and abort the mission. Stripping them empties the phrase instead, so
+# _target_candidate() returns None and the Data Engineer infers the target,
+# which is the conservative outcome for prose that never names a column.
 STOPWORDS = frozenset({
     "the", "a", "an", "of", "for", "each", "this", "that", "our", "their", "its",
     "customer", "user", "client", "patient", "house", "home", "product", "model",
     "is", "column", "value", "values", "data", "dataset",
     "from", "in", "on", "with", "using", "by", "at", "to", "and", "or", "based",
     "given", "across", "per", "next", "last", "new", "these", "those",
+    "whether", "if", "will", "not",
 })
 
 TARGET_PATTERNS = (

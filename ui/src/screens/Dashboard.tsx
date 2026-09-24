@@ -1,38 +1,43 @@
-import { useState, useEffect, useRef } from 'react';
-import type { MissionState, Experiment, Stage } from '../types';
+import type { Experiment, MissionState, Rejection } from '../types';
 import ScoreChart from '../components/ScoreChart';
-import { deterministicExperiments } from '../data/demoData';
+import {
+  baselineDelta, describeConfig, formatMetric, formatSeconds, formatSigned, isUnavailable, progressLabel,
+} from '../lib/reduce';
 
 interface Props {
   mission: MissionState;
+  error: string | null;
   onComplete: () => void;
+  onRestart: () => void;
 }
 
-const STAGES: Stage[] = ['experiment', 'measure', 'diagnose', 'hypothesize', 'decide'];
-const STAGE_LABELS: Record<Stage, string> = {
-  experiment: 'Experiment',
-  measure: 'Measure',
-  diagnose: 'Diagnose',
-  hypothesize: 'Hypothesize',
-  decide: 'Decide',
+const LOOP = ['Experiment', 'Measure', 'Diagnose', 'Hypothesize', 'Decide'] as const;
+
+/** Maps the last backend stage onto the loop step being narrated. */
+const STAGE_TO_INDEX: Record<string, number> = {
+  experiment: 0,
+  measure: 1,
+  diagnose: 2,
+  hypothesize: 3,
+  decide: 4,
 };
 
-function StageIndicator({ current }: { current: Stage }) {
-  const idx = STAGES.indexOf(current);
+function StageIndicator({ stage, complete }: { stage: string | null; complete: boolean }) {
+  const idx = stage ? (STAGE_TO_INDEX[stage] ?? -1) : -1;
   return (
     <div className="flex items-center gap-1">
-      {STAGES.map((s, i) => (
+      {LOOP.map((s, i) => (
         <div key={s} className="flex items-center">
           <div
-            className={`px-3 py-1 rounded-full text-xs font-semibold transition-all duration-300 ${i === idx
-              ? 'bg-indigo-600 text-white shadow-sm'
-              : i < idx
+            className={`px-3 py-1 rounded-full text-xs font-semibold transition-all duration-300 ${complete || i < idx
               ? 'bg-emerald-100 text-emerald-600'
-              : 'bg-gray-100 text-gray-400'}`}
+              : i === idx
+                ? 'bg-indigo-600 text-white shadow-sm'
+                : 'bg-gray-100 text-gray-400'}`}
           >
-            {STAGE_LABELS[s]}
+            {s}
           </div>
-          {i < STAGES.length - 1 && (
+          {i < LOOP.length - 1 && (
             <div className={`w-4 h-px mx-0.5 ${i < idx ? 'bg-emerald-300' : 'bg-gray-200'}`} />
           )}
         </div>
@@ -41,452 +46,514 @@ function StageIndicator({ current }: { current: Stage }) {
   );
 }
 
-function MetricBadge({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
+function MetricCell({ label, value, signed }: { label: string; value: unknown; signed?: boolean }) {
+  const unavailable = isUnavailable(value);
+  const text = unavailable
+    ? 'N/A'
+    : signed
+      ? formatSigned(Number(value))
+      : formatMetric(value);
   return (
     <div className="p-4 rounded-2xl bg-indigo-50/60 border border-indigo-100">
       <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">{label}</div>
-      <div className="text-2xl font-extrabold text-gray-900 font-mono">{value}</div>
-      {sub && <div className="text-xs text-gray-400 mt-0.5">{sub}</div>}
+      <div className={`text-2xl font-extrabold font-mono ${unavailable ? 'text-gray-300' : 'text-gray-900'}`}>
+        {text}
+      </div>
     </div>
   );
 }
 
-function ExperimentCard({ exp, isCurrent }: { exp: Experiment; isCurrent: boolean }) {
-  const stage = exp.revealStage;
-  const showMeasured = ['measure', 'diagnose', 'hypothesize', 'decide', 'complete'].includes(stage);
-  const showDiagnosis = ['diagnose', 'hypothesize', 'decide', 'complete'].includes(stage);
-  const showHypothesis = ['hypothesize', 'decide', 'complete'].includes(stage);
-  const showDecision = ['decide', 'complete'].includes(stage);
+function Rejections({ rejections }: { rejections: Rejection[] }) {
+  if (!rejections.length) return null;
+  return (
+    <div className="mx-5 mt-4 p-3 rounded-xl bg-orange-50 border border-orange-200">
+      <div className="text-[10px] font-bold text-orange-600 uppercase tracking-widest mb-1">
+        {rejections.length} proposal{rejections.length > 1 ? 's' : ''} rejected by the validator
+      </div>
+      {rejections.map((r, i) => (
+        <div key={i} className="text-xs font-mono text-orange-700">
+          [{r.source}] {r.reason}
+        </div>
+      ))}
+      <div className="text-[10px] text-orange-500 mt-1">
+        Rejected proposals never ran and have no measured result.
+      </div>
+    </div>
+  );
+}
 
-  const decisionColor = {
-    CONTINUE: 'bg-emerald-50 border-emerald-200 text-emerald-700',
-    STOP: 'bg-violet-50 border-violet-200 text-violet-700',
-    REVISE: 'bg-orange-50 border-orange-200 text-orange-600',
-  }[exp.decision ?? 'CONTINUE'];
+function ExperimentCard({ exp, isCurrent, objective }: { exp: Experiment; isCurrent: boolean; objective: MissionState['objective'] }) {
+  const metric = objective?.primary_metric ?? null;
+  const result = exp.result;
+  const failed = result !== null && !result.ok;
 
-  if (!isCurrent && stage === 'complete') {
+  const decisionTone = {
+    continue: 'bg-emerald-50 border-emerald-200 text-emerald-700',
+    stop: 'bg-violet-50 border-violet-200 text-violet-700',
+    revise: 'bg-orange-50 border-orange-200 text-orange-600',
+  }[exp.decision?.action ?? ''] ?? 'bg-gray-50 border-gray-200 text-gray-500';
+
+  // Completed experiments collapse to a receipt — the timeline IS the history.
+  if (!isCurrent && exp.decision) {
     return (
-      <div className="card px-4 py-3 flex items-center gap-4 group hover:shadow-md transition-all duration-200">
-        <span className="font-mono text-xs font-bold text-indigo-400 w-8">E{String(exp.id).padStart(2, '0')}</span>
+      <div className="card px-4 py-3 flex items-center gap-4 hover:shadow-md transition-all duration-200">
+        <span className="font-mono text-xs font-bold text-indigo-400 w-8">
+          E{String(exp.id).padStart(2, '0')}
+        </span>
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-semibold text-gray-700 truncate">{exp.model}</div>
+          <div className="text-sm font-semibold text-gray-700 truncate font-mono">
+            {exp.config?.model ?? '—'}
+          </div>
         </div>
         <div className="text-right">
-          <div className="font-mono font-bold text-gray-900 text-sm">{exp.metrics?.f1_macro.toFixed(4)}</div>
-          <div className="text-xs text-gray-400">F1 Macro</div>
+          <div className={`font-mono font-bold text-sm ${failed ? 'text-red-500' : 'text-gray-900'}`}>
+            {failed
+              ? 'FAILED'
+              : metric
+                ? formatMetric(result?.metrics?.[metric])
+                : '—'}
+          </div>
+          <div className="text-xs text-gray-400">{metric?.replace(/_/g, ' ') ?? ''}</div>
         </div>
-        <div className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${decisionColor}`}>
-          {exp.decision}
+        <div className={`text-[10px] font-bold px-2 py-0.5 rounded-full border uppercase ${decisionTone}`}>
+          {exp.decision.action}
         </div>
       </div>
     );
   }
 
   return (
-    <div className={`card-elevated overflow-hidden animate-in ${isCurrent ? 'ring-2 ring-indigo-300 ring-offset-2' : ''}`}>
-      {/* Header */}
+    <div className={`card-elevated overflow-hidden ${isCurrent ? 'ring-2 ring-indigo-300 ring-offset-2' : ''}`}>
+      {/* Header — identity and provenance, from the real events */}
       <div className="p-5 border-b border-indigo-50">
         <div className="flex items-start justify-between mb-2">
           <div>
             <div className="font-mono text-xs font-bold text-indigo-400 mb-1">
               EXPERIMENT {String(exp.id).padStart(2, '0')}
-              {isCurrent && <span className="ml-2 text-[10px] bg-indigo-100 text-indigo-600 px-2 py-0.5 rounded-full non-mono">CURRENT</span>}
+              {isCurrent && (
+                <span className="ml-2 text-[10px] bg-indigo-100 text-indigo-600 px-2 py-0.5 rounded-full">
+                  CURRENT
+                </span>
+              )}
             </div>
-            <div className="text-lg font-bold text-gray-900">{exp.model}</div>
+            <div className="text-lg font-bold text-gray-900 font-mono">
+              {exp.config?.model ?? '—'}
+            </div>
           </div>
-          <div className={`text-xs font-bold px-2.5 py-1 rounded-full border ${exp.provenance === 'AI_GUIDED' ? 'bg-violet-50 border-violet-200 text-violet-600' : 'bg-indigo-50 border-indigo-200 text-indigo-600'}`}>
-            {exp.provenance === 'AI_GUIDED' ? '✦ AI GUIDED' : 'ATLAS RULES'}
+          <div
+            className={`text-xs font-bold px-2.5 py-1 rounded-full border ${
+              exp.source === 'llm'
+                ? 'bg-violet-50 border-violet-200 text-violet-600'
+                : 'bg-indigo-50 border-indigo-200 text-indigo-600'
+            }`}
+          >
+            {exp.source === 'llm' ? '✦ AI GUIDED' : exp.source === 'baseline' ? 'BASELINE' : 'ATLAS RULES'}
           </div>
         </div>
         <div className="flex flex-wrap gap-2 mt-2">
-          {Object.entries(exp.params).map(([k, v]) => (
+          {Object.entries(exp.config?.params ?? {}).map(([k, v]) => (
             <span key={k} className="font-mono text-xs bg-gray-50 border border-gray-100 px-2 py-0.5 rounded-lg text-gray-600">
-              {k}: {v}
+              {k}: {String(v)}
             </span>
           ))}
         </div>
       </div>
 
-      {/* FACT */}
-      {showMeasured && exp.metrics && (
-        <div className="p-5 border-b border-indigo-50 animate-in">
+      {/* FACT — what the engine actually measured */}
+      {result && (
+        <div className="p-5 border-b border-indigo-50">
           <div className="flex items-center gap-2 mb-3">
             <div className="w-1 h-4 rounded-full bg-blue-400" />
-            <span className="text-xs font-bold text-blue-500 uppercase tracking-widest">FACT — Measured</span>
+            <span className="text-xs font-bold text-blue-500 uppercase tracking-widest">
+              Fact — Measured
+            </span>
+            {result.seconds !== undefined && (
+              <span className="ml-auto text-[10px] font-mono text-gray-400">
+                {formatSeconds(result.seconds)}
+              </span>
+            )}
           </div>
-          <div className="grid grid-cols-4 gap-3">
-            <MetricBadge label="F1 Macro" value={exp.metrics.f1_macro.toFixed(4)} />
-            <MetricBadge label="Recall" value={exp.metrics.recall.toFixed(4)} />
-            <MetricBadge label="Precision" value={exp.metrics.precision.toFixed(4)} />
-            <MetricBadge
-              label="Overfit Gap"
-              value={`+${exp.metrics.overfit_gap.toFixed(4)}`}
-              sub={exp.metrics.overfit_gap > 0.12 ? '⚠ High' : 'Acceptable'}
-            />
-          </div>
-        </div>
-      )}
 
-      {/* INTERPRETATION — Diagnosis */}
-      {showDiagnosis && exp.diagnosis && (
-        <div className="p-5 border-b border-indigo-50 animate-in">
-          <div className="flex items-center gap-2 mb-3">
-            <div className="w-1 h-4 rounded-full bg-violet-400" />
-            <span className="text-xs font-bold text-violet-500 uppercase tracking-widest">INTERPRETATION — Diagnosis</span>
-          </div>
-          <p className="text-sm text-gray-700 leading-relaxed font-medium">{exp.diagnosis}</p>
-        </div>
-      )}
+          {failed ? (
+            // An execution error is not a score of zero, and no diagnosis follows it.
+            <div className="p-4 rounded-2xl bg-red-50 border border-red-200">
+              <div className="text-xs font-bold text-red-600 uppercase tracking-widest mb-1">
+                Execution failed
+              </div>
+              <div className="text-xs font-mono text-red-700 break-words">
+                {result.error ?? 'the experiment raised without a message'}
+              </div>
+              <div className="text-[10px] text-red-500 mt-2">
+                No metrics were produced. This experiment cannot be ranked.
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              {metric && <MetricCell label={metric.replace(/_/g, ' ')} value={result.metrics?.[metric]} />}
+              <MetricCell label="Recall" value={result.metrics?.recall} />
+              <MetricCell label="Precision" value={result.metrics?.precision} />
+              <MetricCell label="Overfit gap" value={result.metrics?.overfit_gap} signed />
+            </div>
+          )}
 
-      {/* INTERPRETATION — Hypothesis */}
-      {showHypothesis && exp.hypothesis && (
-        <div className="p-5 border-b border-indigo-50 animate-in">
-          <div className="flex items-center gap-2 mb-3">
-            <div className="w-1 h-4 rounded-full bg-cyan-400" />
-            <span className="text-xs font-bold text-cyan-500 uppercase tracking-widest">INTERPRETATION — Hypothesis</span>
-          </div>
-          <p className="text-sm text-gray-700 leading-relaxed font-medium">{exp.hypothesis}</p>
-          {exp.evidence && exp.evidence.length > 0 && (
-            <div className="flex flex-wrap gap-2 mt-3">
-              <span className="text-xs text-gray-400 mr-1 self-center">Evidence:</span>
-              {exp.evidence.map(ev => (
-                <span key={ev} className="text-xs bg-cyan-50 border border-cyan-100 text-cyan-700 font-semibold px-2.5 py-1 rounded-full">
-                  {ev}
-                </span>
-              ))}
+          {!failed && result.metrics?.test_rows !== undefined && (
+            <div className="mt-3 text-[10px] font-mono text-gray-400">
+              {String(result.metrics.test_rows)} held-out rows
+              {result.metrics.positive_class ? ` · positive class "${String(result.metrics.positive_class)}"` : ''}
             </div>
           )}
         </div>
       )}
 
-      {/* ACTION — Decision */}
-      {showDecision && exp.decision && (
-        <div className="p-5 animate-in">
+      {/* INTERPRETATION — what ATLAS concluded */}
+      {(exp.diagnosis || exp.hypothesis) && (
+        <div className="p-5 border-b border-indigo-50 bg-violet-50/30">
           <div className="flex items-center gap-2 mb-3">
-            <div className="w-1 h-4 rounded-full bg-emerald-400" />
-            <span className="text-xs font-bold text-emerald-600 uppercase tracking-widest">ACTION — Decision</span>
+            <div className="w-1 h-4 rounded-full bg-violet-400" />
+            <span className="text-xs font-bold text-violet-500 uppercase tracking-widest">
+              Interpretation — ATLAS Reasoning
+            </span>
           </div>
-          <div className="flex items-start gap-4">
-            <div className={`text-sm font-extrabold px-4 py-2 rounded-xl border-2 ${decisionColor}`}>
-              {exp.decision}
+
+          {exp.diagnosis && (
+            <div className="mb-4">
+              <div className="text-xs font-bold text-violet-600 uppercase tracking-wider mb-1">
+                Diagnosis · {exp.diagnosis.category.replace(/_/g, ' ')}
+              </div>
+              <p className="text-sm text-gray-700">{exp.diagnosis.summary}</p>
+              {exp.diagnosis.findings.length > 0 && (
+                <ul className="mt-2 space-y-1">
+                  {exp.diagnosis.findings.map((f) => {
+                    const cited = exp.hypothesis?.cites?.includes(f) ?? false;
+                    return (
+                      <li
+                        key={f}
+                        data-finding={f}
+                        className={`text-xs ${cited ? 'text-gray-800 font-medium' : 'text-gray-500'}`}
+                      >
+                        — {f}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
             </div>
-            <p className="text-sm text-gray-600 font-medium self-center">{exp.decisionReason}</p>
-          </div>
+          )}
+
+          {exp.hypothesis && (
+            <div>
+              <div className="text-xs font-bold text-violet-600 uppercase tracking-wider mb-1">
+                Hypothesis · {exp.hypothesis.source === 'llm' ? 'AI guided' : 'ATLAS rules'}
+              </div>
+              <p className="text-sm text-gray-800 font-medium">{exp.hypothesis.proposedChange}</p>
+              <p className="text-xs text-gray-500 mt-1">{exp.hypothesis.reasoning}</p>
+              <p className="text-xs text-gray-400 mt-1 italic">
+                Expected: {exp.hypothesis.expectedEffect}
+              </p>
+              {exp.hypothesis.cites.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-3">
+                  <span className="text-[10px] text-gray-400 uppercase tracking-wider self-center">
+                    cites
+                  </span>
+                  {exp.hypothesis.cites.map((c) => (
+                    <span
+                      key={c}
+                      className="text-[10px] font-mono bg-white border border-violet-200 text-violet-600 px-2 py-0.5 rounded-full"
+                    >
+                      {c}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {!exp.hypothesis && (
+            <div className="text-xs text-gray-400 italic">No untried hypothesis remains.</div>
+          )}
         </div>
       )}
 
-      {/* Running shimmer */}
-      {isCurrent && stage === 'experiment' && (
-        <div className="p-5">
-          <div className="shimmer h-4 rounded-lg mb-2" />
-          <div className="shimmer h-4 rounded-lg w-3/4" />
+      <Rejections rejections={exp.rejections} />
+
+      {/* ACTION — what ATLAS decided */}
+      {exp.decision && (
+        <div className="p-5 bg-gradient-to-r from-indigo-50/60 to-violet-50/40">
+          <div className="flex items-center gap-3">
+            <div className="w-1 h-4 rounded-full bg-indigo-400" />
+            <span className="text-xs font-bold text-indigo-500 uppercase tracking-widest">
+              Action — Decision
+            </span>
+            <span className={`ml-auto text-lg font-extrabold uppercase tracking-wide ${
+              exp.decision.action === 'continue'
+                ? 'text-emerald-600'
+                : exp.decision.action === 'stop'
+                  ? 'text-violet-600'
+                  : 'text-orange-500'
+            }`}>
+              {exp.decision.action}
+            </span>
+          </div>
+          <p className="text-sm text-gray-600 mt-2">{exp.decision.reason}</p>
+          {exp.hypothesis?.nextConfig && (
+            <p className="text-xs font-mono text-gray-500 mt-2">
+              next → {describeConfig(exp.hypothesis.nextConfig)}
+            </p>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-export default function Dashboard({ mission, onComplete }: Props) {
-  const [experiments, setExperiments] = useState<Experiment[]>([]);
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [stage, setStage] = useState<Stage>('experiment');
-  const [missionComplete, setMissionComplete] = useState(false);
-  const [stopReason, setStopReason] = useState('');
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
-
-  const source = deterministicExperiments.slice(0, mission.config.maxExperiments);
-
-  useEffect(() => {
-    let expIdx = 0;
-    let stageIdx = 0;
-    const DELAYS: Record<Stage, number> = {
-      experiment: 900,
-      measure: 1100,
-      diagnose: 1300,
-      hypothesize: 1100,
-      decide: 900,
-    };
-
-    function advance() {
-      const exp = source[expIdx];
-      if (!exp) return;
-      const currentStage = STAGES[stageIdx] as Stage;
-
-      setStage(currentStage);
-      setExperiments(prev => {
-        const next = [...prev];
-        const existingIdx = next.findIndex(e => e.id === exp.id);
-        const updated: Experiment = { ...exp, status: 'running', revealStage: currentStage };
-        if (existingIdx >= 0) {
-          next[existingIdx] = updated;
-        } else {
-          next.push(updated);
-        }
-        return next;
-      });
-      setCurrentIndex(expIdx);
-
-      stageIdx++;
-      if (stageIdx >= STAGES.length) {
-        // finish this experiment
-        setExperiments(prev => {
-          const next = [...prev];
-          const idx = next.findIndex(e => e.id === exp.id);
-          if (idx >= 0) next[idx] = { ...exp, status: 'complete', revealStage: 'complete' };
-          return next;
-        });
-
-        expIdx++;
-        stageIdx = 0;
-
-        if (expIdx >= source.length || exp.decision === 'STOP') {
-          timerRef.current = setTimeout(() => {
-            setMissionComplete(true);
-            setStopReason(exp.decision === 'STOP' ? 'Objective reached' : `${source.length} experiments evaluated`);
-            setCurrentIndex(expIdx - 1);
-          }, 1200);
-          return;
-        }
-        timerRef.current = setTimeout(advance, 1400);
-      } else {
-        timerRef.current = setTimeout(advance, DELAYS[currentStage]);
-      }
-    }
-
-    timerRef.current = setTimeout(advance, 600);
-    return () => clearTimeout(timerRef.current);
-  }, []);
-
-  const bestExp = experiments
-    .filter(e => e.metrics)
-    .reduce<Experiment | null>((best, e) => {
-      if (!best || e.metrics!.f1_macro > best.metrics!.f1_macro) return e;
-      return best;
-    }, null);
-
-  const currentExp = experiments[currentIndex];
+export default function Dashboard({ mission, error, onComplete, onRestart }: Props) {
+  const experiments = mission.experiments;
+  const current = experiments.find((e) => e.id === mission.currentId) ?? experiments[experiments.length - 1] ?? null;
+  const older = experiments.filter((e) => e.id !== current?.id).reverse();
+  const complete = mission.status === 'complete';
+  const blocked = mission.status === 'blocked';
+  const metric = mission.objective?.primary_metric ?? null;
+  const delta = baselineDelta(mission);
 
   return (
     <div className="min-h-screen" style={{ background: 'linear-gradient(160deg, #F4F6FF 0%, #EEF1FF 40%, #F8F6FF 100%)' }}>
-      {/* Header */}
-      <header className="border-b border-indigo-100" style={{ background: 'rgba(255,255,255,0.8)', backdropFilter: 'blur(12px)', position: 'sticky', top: 0, zIndex: 50 }}>
+      <header className="border-b border-indigo-100" style={{ background: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(12px)', position: 'sticky', top: 0, zIndex: 50 }}>
         <div className="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-7 h-7 rounded-lg gradient-primary flex items-center justify-center">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <div className="w-8 h-8 rounded-lg gradient-primary flex items-center justify-center">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                 <path d="M8 2L14 5.5V10.5L8 14L2 10.5V5.5L8 2Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
                 <circle cx="8" cy="8" r="2" fill="white" />
               </svg>
             </div>
             <span className="font-bold text-gray-900 tracking-tight">ATLAS</span>
           </div>
-
-          {/* Status */}
-          <div className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-bold ${missionComplete ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-indigo-50 text-indigo-700 border border-indigo-200'}`}>
-            {missionComplete ? (
-              <>
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <circle cx="7" cy="7" r="6" fill="#10B981" />
-                  <path d="M4 7l2 2 4-4" stroke="white" strokeWidth="1.5" strokeLinecap="round" />
-                </svg>
-                MISSION COMPLETE — {stopReason}
-              </>
+          <div className="flex items-center gap-3">
+            {blocked ? (
+              <span className="text-xs font-bold px-4 py-1.5 rounded-full bg-orange-50 text-orange-700 border border-orange-200">
+                MISSION BLOCKED
+              </span>
+            ) : complete ? (
+              <span className="text-xs font-bold px-4 py-1.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                MISSION COMPLETE
+              </span>
             ) : (
-              <>
-                <div className="w-2 h-2 rounded-full bg-indigo-500 pulse-dot" />
-                ATLAS IS EXPERIMENTING — Running Experiment {String((currentIndex + 1)).padStart(2, '0')}
-              </>
+              <StageIndicator stage={mission.stage} complete={false} />
             )}
-          </div>
-
-          {/* Stage indicator */}
-          {!missionComplete && <StageIndicator current={stage} />}
-
-          {missionComplete && (
             <button
-              onClick={onComplete}
-              className="gradient-primary text-white text-sm font-bold px-5 py-2 rounded-xl hover:shadow-md hover:shadow-indigo-200 transition-all"
+              onClick={onRestart}
+              className="text-xs font-semibold text-gray-500 hover:text-indigo-600 transition-colors"
             >
-              View Comparison →
+              New mission
             </button>
-          )}
+          </div>
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-6 py-6 grid grid-cols-12 gap-5">
-        {/* LEFT — Mission Context */}
-        <div className="col-span-2 flex flex-col gap-4">
-          <div className="card p-4">
-            <div className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">Mission</div>
-            <div className="text-sm font-bold text-gray-900 mb-4 leading-snug">{mission.config.task.slice(0, 80)}{mission.config.task.length > 80 ? '…' : ''}</div>
-            {[
-              { label: 'Dataset', value: <span className="font-mono text-xs">{mission.config.dataset}</span> },
-              { label: 'Rows', value: mission.config.rows.toLocaleString() },
-              { label: 'Target', value: <span className="font-mono text-xs text-indigo-600">{mission.config.target}</span> },
-              { label: 'Task', value: mission.config.problemType },
-              { label: 'Metric', value: mission.config.primaryMetric },
-              { label: 'Priority', value: mission.config.priority },
-            ].map(({ label, value }) => (
-              <div key={label} className="mb-3">
-                <div className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold mb-0.5">{label}</div>
-                <div className="text-xs font-semibold text-gray-700">{value}</div>
-              </div>
-            ))}
-
-            {/* Budget */}
-            <div className="mt-4 pt-4 border-t border-gray-100">
-              <div className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold mb-2">Budget</div>
-              <div className="text-sm font-bold text-gray-900 mb-2">
-                {missionComplete ? experiments.filter(e => e.status === 'complete').length : currentIndex + 1} of ≤{mission.config.maxExperiments}
-              </div>
-              <div className="flex gap-1">
-                {Array.from({ length: mission.config.maxExperiments }, (_, i) => (
-                  <div
-                    key={i}
-                    className="flex-1 h-1.5 rounded-full transition-all duration-500"
-                    style={{
-                      background: i < experiments.filter(e => e.status === 'complete').length
-                        ? 'linear-gradient(90deg, #4F6AF7, #7C3AED)'
-                        : i === currentIndex && !missionComplete ? '#E0E7FF' : '#F3F4F6'
-                    }}
-                  />
-                ))}
-              </div>
+      <div className="max-w-7xl mx-auto px-6 py-8">
+        {/* Mission bar */}
+        <div className="card p-4 mb-6 flex flex-wrap items-center gap-6">
+          <div>
+            <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Target</div>
+            <div className="font-mono text-sm text-gray-800">{mission.profile?.target ?? '—'}</div>
+          </div>
+          <div>
+            <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Objective</div>
+            <div className="font-mono text-sm text-gray-800">
+              {metric ? `${metric.replace(/_/g, ' ')} ${mission.objective?.direction === 'minimize' ? '↓' : '↑'}` : '—'}
             </div>
           </div>
+          <div>
+            <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Experiments</div>
+            <div className="font-mono text-sm text-gray-800">{progressLabel(mission)}</div>
+          </div>
+          {mission.profile && (
+            <div>
+              <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Dataset</div>
+              <div className="font-mono text-sm text-gray-800">
+                {mission.profile.rows} × {mission.profile.columns}
+              </div>
+            </div>
+          )}
+          {mission.profile && (
+            <div>
+              <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Imbalance</div>
+              <div className="font-mono text-sm text-gray-800">
+                {mission.profile.imbalance_ratio?.toFixed(2)}:1
+              </div>
+            </div>
+          )}
+          {error && (
+            <div className="ml-auto text-xs text-red-600 font-medium">{error}</div>
+          )}
         </div>
 
-        {/* CENTER — Score Graph + Experiment Cards */}
-        <div className="col-span-7 flex flex-col gap-5">
-          {/* Score Chart */}
-          <div className="card-elevated p-5">
-            <div className="flex items-center justify-between mb-1">
+        {/* Data Engineer refusal — nothing ran, and the UI says so. */}
+        {blocked && mission.blocked && (
+          <div className="card-elevated p-6 mb-6 border-l-4 border-orange-400">
+            <div className="text-xs font-bold text-orange-600 uppercase tracking-widest mb-2">
+              Data Engineer · target not confirmed
+            </div>
+            <p className="text-sm text-gray-700">{mission.blocked.reason}</p>
+            <p className="text-xs font-mono text-gray-400 mt-2">
+              best guess was "{mission.blocked.target}" · available columns:{' '}
+              {mission.blocked.columns.join(', ')}
+            </p>
+            <p className="text-xs text-gray-500 mt-3">
+              No experiment ran. ATLAS does not train on an unconfirmed target.
+            </p>
+          </div>
+        )}
+
+        {/* Hero: score progression */}
+        {!blocked && (
+          <div className="card-elevated p-6 mb-6">
+            <div className="flex items-center justify-between mb-4">
               <div>
-                <div className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Score Progression</div>
-                <div className="text-sm font-bold text-gray-700">Primary Metric — F1 Macro</div>
+                <h2 className="text-sm font-bold text-gray-700 uppercase tracking-widest">
+                  Score Progression
+                </h2>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  {metric
+                    ? `Measured ${metric.replace(/_/g, ' ')} after each experiment`
+                    : 'Awaiting the objective'}
+                </p>
               </div>
-              {bestExp && (
+              {mission.best && (
                 <div className="text-right">
-                  <div className="text-xs text-gray-400 mb-0.5">Current Best</div>
-                  <div className="font-mono font-extrabold text-indigo-600 text-lg">{bestExp.metrics!.f1_macro.toFixed(4)}</div>
+                  <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">
+                    Best {mission.best.provisional ? '(so far)' : '(final)'}
+                  </div>
+                  <div className="font-mono text-2xl font-extrabold text-gray-900">
+                    {formatMetric(mission.best.score)}
+                  </div>
+                  {delta !== null && (
+                    <div className={`text-xs font-bold ${delta >= 0 ? 'text-emerald-600' : 'text-gray-400'}`}>
+                      {formatSigned(delta)} vs baseline
+                    </div>
+                  )}
                 </div>
               )}
             </div>
-            {experiments.filter(e => e.metrics).length > 0 ? (
-              <ScoreChart experiments={experiments} currentIndex={currentIndex} />
-            ) : (
-              <div className="h-[260px] flex items-center justify-center">
-                <div className="text-center">
-                  <div className="w-8 h-8 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin mx-auto mb-3" />
-                  <div className="text-sm text-gray-400 font-medium">Running first experiment…</div>
+            <ScoreChart
+              experiments={experiments}
+              objective={mission.objective}
+              currentId={mission.currentId}
+            />
+          </div>
+        )}
+
+        {/* Loop narrative */}
+        {!blocked && (
+          <div className="grid grid-cols-3 gap-6">
+            <div className="col-span-2 flex flex-col gap-4">
+              {current ? (
+                <ExperimentCard exp={current} isCurrent={!complete} objective={mission.objective} />
+              ) : (
+                <div className="card p-8 text-center">
+                  <div className="text-sm font-bold text-gray-700 mb-1">
+                    {mission.profile ? 'Dataset profiled' : 'Mission accepted'}
+                  </div>
+                  <p className="text-xs text-gray-400">
+                    {mission.profile
+                      ? `${mission.profile.rows} rows across ${mission.profile.columns} features. Training experiment 01…`
+                      : 'Waiting for the Data Engineer to profile the dataset…'}
+                  </p>
                 </div>
+              )}
+
+              {older.length > 0 && (
+                <>
+                  <div className="text-xs font-bold text-gray-400 uppercase tracking-widest mt-2">
+                    Earlier experiments
+                  </div>
+                  {older.map((e) => (
+                    <ExperimentCard key={e.id} exp={e} isCurrent={false} objective={mission.objective} />
+                  ))}
+                </>
+              )}
+            </div>
+
+            {/* Evidence rail */}
+            <div className="flex flex-col gap-4">
+              <div className="card p-5">
+                <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">
+                  Best Result
+                </h3>
+                {mission.best ? (
+                  <>
+                    <div className="font-mono text-3xl font-extrabold text-gray-900">
+                      {formatMetric(mission.best.score)}
+                    </div>
+                    <div className="text-xs text-gray-400 mt-1">
+                      Experiment {String(mission.best.id).padStart(2, '0')} ·{' '}
+                      {metric?.replace(/_/g, ' ')}
+                    </div>
+                    {mission.best.config && (
+                      <div className="text-[10px] font-mono text-gray-500 mt-2 break-words">
+                        {describeConfig(mission.best.config)}
+                      </div>
+                    )}
+                    {mission.best.provisional && (
+                      <div className="text-[10px] text-indigo-400 mt-2">
+                        provisional — awaiting the authoritative summary
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="font-mono text-3xl font-extrabold text-gray-300">N/A</div>
+                    <div className="text-xs text-gray-400 mt-1">
+                      {experiments.length ? 'nothing scorable yet' : 'no experiments yet'}
+                    </div>
+                  </>
+                )}
               </div>
-            )}
-          </div>
 
-          {/* Experiment cards — current first, then history */}
-          <div className="flex flex-col gap-3">
-            {currentExp && (
-              <ExperimentCard key={`current-${currentExp.id}`} exp={currentExp} isCurrent={!missionComplete} />
-            )}
-            {experiments
-              .filter(e => e.id !== currentExp?.id || missionComplete)
-              .reverse()
-              .map(exp => (
-                <ExperimentCard key={exp.id} exp={exp} isCurrent={false} />
-              ))}
-          </div>
-        </div>
-
-        {/* RIGHT — Best + Stats */}
-        <div className="col-span-3 flex flex-col gap-4">
-          {/* Best Result */}
-          {bestExp ? (
-            <div className="card-elevated overflow-hidden">
-              <div className="px-4 pt-4 pb-3" style={{ background: 'linear-gradient(135deg, rgba(124,58,237,0.06) 0%, rgba(79,106,247,0.06) 100%)' }}>
-                <div className="flex items-center gap-2 mb-3">
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                    <path d="M7 1l1.8 3.6 4 .58-2.9 2.83.68 3.99L7 10l-3.58 1.99.68-3.99L1.2 5.18l4-.58L7 1z" fill="#7C3AED" />
-                  </svg>
-                  <span className="text-xs font-bold text-violet-600 uppercase tracking-widest">Best Result</span>
-                </div>
-                <div className="font-mono text-xs text-violet-400 mb-1">Experiment {String(bestExp.id).padStart(2, '0')}</div>
-                <div className="text-base font-bold text-gray-900 mb-3">{bestExp.model}</div>
-                <div className="text-4xl font-extrabold text-gray-900 font-mono">{bestExp.metrics!.f1_macro.toFixed(4)}</div>
-                <div className="text-xs text-gray-400 mt-1 mb-3">F1 Macro</div>
-                {experiments.filter(e => e.metrics && e.id !== bestExp.id).length > 0 && (() => {
-                  const prev = experiments
-                    .filter(e => e.metrics && e.id !== bestExp.id)
-                    .sort((a, b) => b.metrics!.f1_macro - a.metrics!.f1_macro)[0];
-                  const delta = bestExp.metrics!.f1_macro - prev.metrics!.f1_macro;
-                  return (
-                    <div className="flex items-center gap-2 text-xs">
-                      <span className="text-gray-400">vs previous</span>
-                      <span className={`font-bold ${delta > 0 ? 'text-emerald-600' : 'text-orange-500'}`}>
-                        {delta > 0 ? '+' : ''}{delta.toFixed(4)}
+              {mission.summary && (
+                <div className="card p-5">
+                  <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">
+                    Mission Summary
+                  </h3>
+                  <div className="space-y-2 text-xs">
+                    <div className="flex justify-between gap-2">
+                      <span className="text-gray-400">Experiments</span>
+                      <span className="font-mono text-gray-800">{mission.summary.experiments}</span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-gray-400">Best experiment</span>
+                      <span className="font-mono text-gray-800">
+                        {mission.summary.bestId !== null
+                          ? `E${String(mission.summary.bestId).padStart(2, '0')}`
+                          : 'N/A'}
                       </span>
                     </div>
-                  );
-                })()}
-              </div>
-              <div className="px-4 py-3 border-t border-indigo-50">
-                <div className="text-xs text-gray-400 mb-2 font-semibold">Configuration</div>
-                {Object.entries(bestExp.params).slice(0, 3).map(([k, v]) => (
-                  <div key={k} className="flex items-center justify-between text-xs mb-1">
-                    <span className="font-mono text-gray-500">{k}</span>
-                    <span className="font-mono font-bold text-gray-800">{v}</span>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-gray-400">Best score</span>
+                      <span className="font-mono text-gray-800">
+                        {formatMetric(mission.summary.bestScore)}
+                      </span>
+                    </div>
+                    <div className="pt-2 border-t border-gray-100">
+                      <div className="text-gray-400 mb-1">Stop reason</div>
+                      <div className="text-gray-700">{mission.summary.reason}</div>
+                    </div>
                   </div>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="card p-4 text-center text-sm text-gray-400">
-              <div className="shimmer h-4 rounded mb-2" />
-              <div className="shimmer h-4 rounded w-3/4 mx-auto" />
-            </div>
-          )}
+                </div>
+              )}
 
-          {/* Live stats */}
-          {experiments.filter(e => e.metrics).length > 0 && (
-            <div className="card p-4">
-              <div className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Live Stats</div>
-              {(() => {
-                const withMetrics = experiments.filter(e => e.metrics);
-                const scores = withMetrics.map(e => e.metrics!.f1_macro);
-                const improvements = withMetrics.filter((e, i) => i > 0 && e.metrics!.f1_macro > withMetrics[i-1].metrics!.f1_macro).length;
-                const regressions = withMetrics.filter((e, i) => i > 0 && e.metrics!.f1_macro < withMetrics[i-1].metrics!.f1_macro).length;
-                return (
-                  <div className="flex flex-col gap-2">
-                    {[
-                      { label: 'Experiments', value: withMetrics.length },
-                      { label: 'Improvements', value: improvements, color: 'text-emerald-600' },
-                      { label: 'Regressions', value: regressions, color: 'text-orange-500' },
-                      { label: 'Total Gain', value: `+${(Math.max(...scores) - scores[0]).toFixed(4)}`, color: 'text-indigo-600' },
-                    ].map(({ label, value, color }) => (
-                      <div key={label} className="flex items-center justify-between text-sm">
-                        <span className="text-gray-500">{label}</span>
-                        <span className={`font-bold font-mono ${color ?? 'text-gray-800'}`}>{value}</span>
-                      </div>
-                    ))}
-                  </div>
-                );
-              })()}
+              <button
+                onClick={onComplete}
+                disabled={!complete}
+                className={`w-full rounded-xl py-3 font-bold text-sm transition-all ${complete
+                  ? 'gradient-primary text-white hover:shadow-lg hover:shadow-indigo-200'
+                  : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+              >
+                Compare strategies →
+              </button>
             </div>
-          )}
-
-          {/* Strategy */}
-          <div className="card p-4">
-            <div className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Strategy</div>
-            <div className={`text-sm font-bold px-3 py-2 rounded-xl ${mission.config.aiGuided ? 'bg-violet-50 text-violet-700 border border-violet-200' : 'bg-indigo-50 text-indigo-700 border border-indigo-200'}`}>
-              {mission.config.aiGuided ? '✦ AI Guided' : '⬡ ATLAS Rules'}
-            </div>
-            <p className="text-xs text-gray-400 mt-2">
-              {mission.config.aiGuided
-                ? 'An LLM evaluates each result and proposes the next experiment.'
-                : 'Deterministic rules guide hypothesis generation and decisions.'}
-            </p>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

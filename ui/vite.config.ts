@@ -34,6 +34,14 @@ export default defineConfig(({ mode }) => {
       host: process.env.FIGMA_DEV_SERVER_HOST || '0.0.0.0',
       port: parseInt(process.env.PORT || '8443'),
       strictPort: true,
+      // The ATLAS backend (server.py) owns /api. Proxying it keeps the app's
+      // API_BASE empty in dev exactly as it is when server.py serves the built
+      // bundle, so there is one origin and one code path in both modes.
+      // selfHandleResponse stays off: the SSE body must stream through
+      // untouched, not be buffered and re-sent.
+      proxy: {
+        '/api': { target: 'http://127.0.0.1:8000', changeOrigin: false },
+      },
       watch: {
         ignored: [
           '**/.figma/**',
