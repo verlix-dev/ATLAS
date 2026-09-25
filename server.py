@@ -21,6 +21,7 @@ from __future__ import annotations
 import io
 import json
 import mimetypes
+import os
 import re
 import threading
 import traceback
@@ -49,7 +50,11 @@ DATA_DIR = ROOT / "data"
 # modified or shadowed by an upload. Git-ignored; created on first upload.
 UPLOAD_DIR = ROOT / "uploads"
 MAX_UPLOAD_BYTES = 32 * 1024 * 1024
-HOST, PORT = "127.0.0.1", 8000
+HOST, PORT = "0.0.0.0", int(os.environ.get("PORT", 8000))
+# The browser UI is normally Vite on this origin locally, and Vercel in
+# production. Keep this intentionally specific rather than allowing every
+# website to make state-changing API requests to a deployed ATLAS instance.
+FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:5173")
 
 # SSE keep-alive. Not pacing: pacing is the browser's job, and adding a sleep
 # here would invent compute time the engine never spent.
@@ -260,11 +265,28 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
         print(f"  {self.address_string()} {fmt % args}")
 
+    def _cors_headers(self) -> dict[str, str]:
+        """CORS headers for the one configured browser UI origin.
+
+        Requests without an Origin header are non-browser/same-origin calls and
+        do not need CORS. Rejecting unconfigured origins by omitting the header
+        lets the browser enforce the deployment boundary without affecting the
+        server's ordinary HTTP behaviour.
+        """
+        if self.headers.get("Origin") != FRONTEND_ORIGIN:
+            return {}
+        return {
+            "Access-Control-Allow-Origin": FRONTEND_ORIGIN,
+            "Vary": "Origin",
+        }
+
     def _send(self, code: int, body: bytes, content_type: str, extra: dict | None = None) -> None:
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for key, value in self._cors_headers().items():
+            self.send_header(key, value)
         for key, value in (extra or {}).items():
             self.send_header(key, value)
         self.end_headers()
@@ -290,6 +312,18 @@ class Handler(BaseHTTPRequestHandler):
             return MISSIONS.get(path_parts[2]) if len(path_parts) > 2 else None
 
     # ---- routing ---------------------------------------------------------
+
+    def do_OPTIONS(self) -> None:  # noqa: N802
+        """Answer browser preflight without consuming a request body."""
+        self.send_response(204)
+        for key, value in self._cors_headers().items():
+            self.send_header(key, value)
+        if self.headers.get("Origin") == FRONTEND_ORIGIN:
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Access-Control-Max-Age", "600")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def do_GET(self) -> None:  # noqa: N802
         route = urlparse(self.path).path
@@ -491,6 +525,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache, no-transform")
         self.send_header("Connection", "keep-alive")
         self.send_header("X-Accel-Buffering", "no")
+        for key, value in self._cors_headers().items():
+            self.send_header(key, value)
         self.end_headers()
 
         try:

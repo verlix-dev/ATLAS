@@ -14,8 +14,14 @@ import type {
   MissionRunResponse,
 } from '../types';
 
-/** Empty by default so the built app can be served from the same origin. */
-export const API_BASE = import.meta.env.VITE_ATLAS_API ?? '';
+/**
+ * Empty in local development so Vite's /api proxy remains the transport.
+ * Set VITE_API_BASE_URL to the separately deployed backend (for example on
+ * Render) for a production frontend. Strip a trailing slash so paths below
+ * always join correctly. VITE_ATLAS_API remains a harmless compatibility
+ * fallback for existing local configuration.
+ */
+export const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? import.meta.env.VITE_ATLAS_API ?? '').replace(/\/$/, '');
 
 class ApiError extends Error {
   constructor(
@@ -133,8 +139,7 @@ export async function fetchComparison(body: {
   });
 }
 
-/** Absolute URL for the SSE stream. EventSource cannot be given a relative path
- *  when API_BASE is empty and the page is served from a different origin. */
+/** Uses the configured API origin for cross-origin SSE, or Vite's local proxy. */
 export function eventsUrl(missionId: string): string {
   return `${API_BASE}/api/missions/${missionId}/events`;
 }

@@ -76,6 +76,47 @@ def get(base: str, path: str):
         return json.loads(response.read())
 
 
+def test_configured_origin_receives_cors_headers_and_preflight(live: str) -> None:
+    origin = server.FRONTEND_ORIGIN
+    preflight = urllib.request.Request(
+        f"{live}/api/missions",
+        method="OPTIONS",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "Content-Type",
+        },
+    )
+    with urllib.request.urlopen(preflight, timeout=30) as response:
+        assert response.status == 204
+        assert response.headers["Access-Control-Allow-Origin"] == origin
+        assert response.headers["Access-Control-Allow-Methods"] == "GET, POST, OPTIONS"
+        assert response.headers["Access-Control-Allow-Headers"] == "Content-Type"
+
+    request = urllib.request.Request(f"{live}/api/datasets", headers={"Origin": origin})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        assert response.headers["Access-Control-Allow-Origin"] == origin
+        assert response.headers["Vary"] == "Origin"
+
+    # A completed synthetic run is enough to exercise the transport-level SSE
+    # handshake; _events() only follows its buffered event log.
+    mission_id = f"cors-{uuid.uuid4().hex}"
+    run = server.MissionRun(mission_id, None)  # type: ignore[arg-type]
+    run.finish()
+    with server.MISSIONS_LOCK:
+        server.MISSIONS[mission_id] = run
+    try:
+        stream = urllib.request.Request(
+            f"{live}/api/missions/{mission_id}/events", headers={"Origin": origin}
+        )
+        with urllib.request.urlopen(stream, timeout=30) as response:
+            assert response.headers["Content-Type"] == "text/event-stream"
+            assert response.headers["Access-Control-Allow-Origin"] == origin
+    finally:
+        with server.MISSIONS_LOCK:
+            server.MISSIONS.pop(mission_id, None)
+
+
 def post_json(base: str, path: str, payload: dict):
     request = urllib.request.Request(
         f"{base}{path}",
